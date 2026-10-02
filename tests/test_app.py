@@ -108,6 +108,7 @@ def client(monkeypatch):
     monkeypatch.setattr(kernels, "get", lambda: fake)
     monkeypatch.setattr(kernels, "peek", lambda: fake)
     monkeypatch.setattr(app_module, "_OWNER", None)
+    monkeypatch.setenv("GLOSSTHESI_INSECURE_OPEN", "true")  # the tests are about the reads; the doors have tests of their own
     return _Sync()
 
 
@@ -383,17 +384,38 @@ def test_misfit_takes_categories_as_text_or_by_name(client):
 
 
 def test_keys_gate_when_set(client, monkeypatch):
+    monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_KEYS", "k1, k2")
     assert client.send("/misfit", {}, MISFIT).status_code == 401
     assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer nope"}).status_code == 401
     assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer k2"}).status_code == 200
-    monkeypatch.delenv("GLOSSTHESI_KEYS")
-    assert client.send("/misfit", {}, MISFIT).status_code == 200
+
+
+def test_nothing_is_served_where_nothing_says_who_may_call(client, monkeypatch):
+    """No keys and no audience is not "open": every door refuses, the
+    refusal names the switch, and the service does not start."""
+    from glossthesi import __main__ as entry
+
+    monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
+    for name in ("GLOSSTHESI_KEYS", "GLOSSTHESI_AUDIENCE", "GLOSSTHESI_CALLERS"):
+        monkeypatch.delenv(name, raising=False)
+    r = client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer anything"})
+    assert r.status_code == 401 and "GLOSSTHESI_INSECURE_OPEN=true" in r.json()["error"]
+    assert client.get("/healthz").status_code == 200  # outside the gate, as before
+    with pytest.raises(SystemExit, match="GLOSSTHESI_INSECURE_OPEN=true"):
+        entry.main()
+    # Only the literal `true` opens the doors: the switch is a statement, never a fallback.
+    for said in ("1", "TRUE", "yes", "false", ""):
+        monkeypatch.setenv("GLOSSTHESI_INSECURE_OPEN", said)
+        assert client.send("/misfit", {}, MISFIT).status_code == 401
+    monkeypatch.setenv("GLOSSTHESI_INSECURE_OPEN", " true ")
+    assert client.send("/misfit", {}, MISFIT).status_code == 200 and app_module.arrangement() == "insecure-open"
 
 
 def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
     """With an audience set, only a verified token for it from a listed
     account passes; the verifier is asked once per token until it expires."""
+    monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_AUDIENCE", "https://service.example")
     monkeypatch.setenv("GLOSSTHESI_CALLERS", "glossql@proj.iam.gserviceaccount.com")
     monkeypatch.setattr(app_module, "_TOKENS", {})
@@ -435,7 +457,7 @@ def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
     failed = next(line for line in lines if line["event"] == "request_failed")
     assert failed["severity"] == "ERROR" and failed["route"] == "/misfit" and "ZeroDivisionError" in failed["traceback"]
     refused = next(line for line in lines if line["event"] == "refused")
-    assert refused["status"] == 500 and refused["caller"] == "open"
+    assert refused["status"] == 500 and refused["caller"] == "insecure_dev_mode"
 
 
 def test_a_draining_instance_sends_requests_back_to_retry(client, monkeypatch):

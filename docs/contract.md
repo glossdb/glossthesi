@@ -277,7 +277,9 @@ the contract does not depend on it.
 
 As before: `Authorization: Bearer …`, a Google-signed ID token for
 `GLOSSTHESI_AUDIENCE` from one of `GLOSSTHESI_CALLERS`, or one of
-`GLOSSTHESI_KEYS`; neither set serves open. glossql names a URL per
+`GLOSSTHESI_KEYS`. With neither set every door refuses and the
+service does not start; `GLOSSTHESI_INSECURE_OPEN=true` is the one
+way around, for a laptop. glossql names a URL per
 point (the walk, the misfit); every one names this
 service. Nothing on the wire names a point.
 

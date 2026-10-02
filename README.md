@@ -20,8 +20,8 @@ benchmark (`docs/forecast.md`).
 
 ```bash
 uv sync
-uv run glossthesi                 # 127.0.0.1:8100, the machine's best device
-GLOSSTHESI_KEYS=k1 uv run glossthesi   # a bearer per caller
+GLOSSTHESI_KEYS=k1 uv run glossthesi   # 127.0.0.1:8100, the machine's best device, a bearer per caller
+GLOSSTHESI_INSECURE_OPEN=true uv run glossthesi   # no check at all: a laptop trying it out
 ```
 
 | variable | meaning |
@@ -29,7 +29,8 @@ GLOSSTHESI_KEYS=k1 uv run glossthesi   # a bearer per caller
 | `GLOSSTHESI_ADDR` | where to listen; default `127.0.0.1:8100` |
 | `GLOSSTHESI_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
 | `GLOSSTHESI_AUDIENCE`, `GLOSSTHESI_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
-| `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host); neither set serves open |
+| `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host). With neither set the service does not start, and every door refuses |
+| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossql's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
 | `GLOSSTHESI_VERSION` | the build's name, on every answer, on `/healthz` and every log line; the image bakes the commit |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | a collector to send traces, metrics and logs to (OTLP/HTTP); unset, the JSON log lines on stdout are all; the `otel` extra |
 | `GLOSSTHESI_QUEUE_MB` | what may wait for the device, in MB of tables; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |

@@ -83,7 +83,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker run -d --name kernel -p 8100:8100 -e GLOSSTHESI_DEVICE=cpu "$IMAGE:${{ steps.version.outputs.sha }}"
+          docker run -d --name kernel -p 8100:8100 -e GLOSSTHESI_DEVICE=cpu -e GLOSSTHESI_KEYS=smoke "$IMAGE:${{ steps.version.outputs.sha }}"
           for _ in $(seq 60); do
             if health=$(curl -sf http://127.0.0.1:8100/healthz); then break; fi
             sleep 3

@@ -10,7 +10,8 @@
 # VERSION set to pyproject's version plus the commit; a v* tag names it.
 #
 # What a host sets: GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS (or
-# GLOSSTHESI_KEYS) for the doors, OTEL_EXPORTER_OTLP_ENDPOINT for a
+# GLOSSTHESI_KEYS) for the doors, without which the service does not
+# start, OTEL_EXPORTER_OTLP_ENDPOINT for a
 # collector, the queue and cache sizes (README). Nothing here names a
 # project or a region; that is the deployment's, not the image's.
 

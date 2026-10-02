@@ -20,7 +20,11 @@ the request counts against:
   mistake still refuses. The caller is the account's email.
 - `GLOSSTHESI_KEYS`: shared bearer keys, comma-separated (a laptop, a
   test host). The caller is the key.
-- neither: open (a laptop).
+- neither: every request is refused, and the service does not start.
+- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossql.
+  The doors serve without authentication and every caller is recorded
+  as `insecure_dev_mode`. The name is the warning: a laptop trying the
+  service out, never a deployment.
 """
 
 from __future__ import annotations
@@ -75,6 +79,27 @@ def _names(variable: str) -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
+INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossql's name for it
+UNARRANGED = (
+    "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
+    "GLOSSTHESI_INSECURE_OPEN=true serves open instead, every caller insecure_dev_mode"
+)
+
+
+def insecure_open() -> bool:
+    """Only the literal `true` counts: the switch is a statement, never a fallback."""
+    return os.environ.get("GLOSSTHESI_INSECURE_OPEN", "").strip() == "true"
+
+
+def arrangement() -> str | None:
+    """How a caller is verified; None where nothing is arranged, and then nothing is served."""
+    if insecure_open():
+        return "insecure-open"
+    if os.environ.get("GLOSSTHESI_AUDIENCE", "").strip():
+        return "id-token"
+    return "keys" if _names("GLOSSTHESI_KEYS") else None
+
+
 # Verified ID tokens, kept until they expire: Google's certificates are
 # not fetched per request. token -> (email, exp).
 _TOKENS: dict[str, tuple[str, float]] = {}
@@ -119,6 +144,8 @@ def _caller(request: Request) -> str | None:
     token = token.strip()
     if scheme.lower() != "bearer":
         token = ""
+    if insecure_open():
+        return INSECURE_DEV_MODE
     audience = os.environ.get("GLOSSTHESI_AUDIENCE", "").strip()
     if audience:
         callers = _names("GLOSSTHESI_CALLERS")
@@ -126,10 +153,7 @@ def _caller(request: Request) -> str | None:
             return None
         email = _account(token, audience)
         return email if email is not None and email in callers else None
-    keys = _names("GLOSSTHESI_KEYS")
-    if not keys:
-        return "open"
-    return token if token and token in keys else None
+    return token if token and token in _names("GLOSSTHESI_KEYS") else None
 
 
 async def _body(request: Request) -> bytes:
@@ -154,7 +178,8 @@ def _door(read):
         caller = await run_in_threadpool(_caller, request)
         if caller is None:
             telemetry.refused(401, None, route, "unauthorized")
-            return JSONResponse({"error": "unauthorized: a bearer this service accepts"}, status_code=401)
+            said = "unauthorized: a bearer this service accepts" if arrangement() else f"unauthorized: {UNARRANGED}"
+            return JSONResponse({"error": said}, status_code=401)
         try:
             raw = await _body(request)
             parsed = await run_in_threadpool(wire.parse, request.headers.get("content-type", ""), raw)
