@@ -160,8 +160,10 @@ Findings, not tested rules.
 - **Inputs that determine one another cannot be told apart,** nor can
   an input that follows the calendar (a load forecast by the hour, a
   temperature within one year).
-- **A row with a gap in any input is left out of the history's
-  reading.** A table whose inputs are mostly empty cannot be read.
+- **An empty cell is unknown, not zero.** Where empty means something
+  (no markdown that week), fill it before sending. An input empty in
+  more than half of a member's history is not read, and the reason
+  names it; a row with a gap in an input that is read is left out.
 - **A member that has barely started** is predicted badly.
 - **The change stays inside what the history has seen,** and so does
   the input as planned. An input that grows past its own history, as
@@ -210,12 +212,6 @@ Guidance for a skill, not code in the caller.
 Several inputs changed at once; a change beyond what the history
 holds; one member's input moving another member; columns tied by a
 definition being made to agree with it.
-
-**A known defect: gaps in inputs.** A row with a gap in any input is
-left out of the history's reading for every input. One input column
-that is mostly empty therefore makes the whole member unreadable,
-though the input asked about is complete. To be fixed: an input that
-is mostly empty is left out of the reading, and the answer says so.
 
 ## What could come next
 

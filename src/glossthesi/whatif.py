@@ -29,6 +29,7 @@ RESAMPLES = 300
 INTERVAL = 0.90  # of the history's slope, by resampling
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
 STILL = 0.10  # a shift under this share of the column's spread counts as none
+MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
 CONTEXT = 4096  # the past periods TabICL's forecaster reads at most
 MIN_HISTORY = 26  # the rows a member needs behind a prediction
 MEDIAN = 0.5
@@ -184,8 +185,6 @@ def reading(member: Member, target: str, changed: str, held_back: np.ndarray, pl
     the scenario per period with its interval, how much the input
     explains, and the error on the held-back periods."""
     h, y = len(member.ahead), member.targets[target]
-    names = list(member.inputs)
-    j = names.index(changed)
     past = member.inputs[changed]
     delta = member.scenario[changed] - member.plan[changed]
     moved = float(np.nanmean(delta)) if (~np.isnan(delta)).any() else 0.0
@@ -198,21 +197,36 @@ def reading(member: Member, target: str, changed: str, held_back: np.ndarray, pl
     seen = past[~np.isnan(past)]
     if not (delta[~np.isnan(delta)] != 0).any():
         return out | {"sign": "0", "basis": "the input is the same as planned and under the scenario for this member"}
+    # An empty cell is unknown, not zero. An input that is mostly empty is not read: the changed one cannot be
+    # answered, another one is left out of what is held, and the reason says so. A row with a gap in an input
+    # that is read is left out, so an input kept in spite of its gaps costs rows.
+    known = ~np.isnan(y)
+    if known.any() and np.isnan(past[known]).mean() > MOSTLY_EMPTY:
+        return out | {"basis": "the input is mostly empty in this member's history"}
+    there = known & ~np.isnan(past)
+    left_out = [c for c, v in member.inputs.items() if c != changed and there.any() and np.isnan(v[there]).mean() > MOSTLY_EMPTY]
+    names = [c for c in member.inputs if c not in left_out]
+    j = names.index(changed)
+    note = "; not read, being mostly empty: " + ", ".join(f"`{c}`" for c in left_out) if left_out else ""
+
+    def say(basis: str, **more) -> dict:
+        return out | more | {"basis": basis + note}
+
     if len(seen) < 2 or np.std(seen) == 0:
-        return out | {"basis": "the input never varied in this member's history"}
+        return say("the input never varied in this member's history")
     asked = member.scenario[changed][~np.isnan(member.scenario[changed])]
     if (asked > seen.max()).any() or (asked < seen.min()).any():
         # Said apart: the input as planned may already lie where the history never was, before anything is changed.
         planned = member.plan[changed][~np.isnan(member.plan[changed])]
         what = "the input as planned" if (planned > seen.max()).any() or (planned < seen.min()).any() else "the change"
-        return out | {"basis": f"{what} goes beyond what the history holds: the input lay between {seen.min():g} and {seen.max():g}"}
+        return say(f"{what} goes beyond what the history holds: the input lay between {seen.min():g} and {seen.max():g}")
     read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts)
     slope, on_changes, free = read["slope"][j], read["slope_on_changes"][j], read["free"][j]
     if not np.isfinite(slope) or not np.isfinite(on_changes):
-        return out | {"basis": "the history is too short to read how the column moved with the input"}
+        return say("the history is too short to read how the column moved with the input")
     out["explains"] = float(read["explains"][j])
     if free < SEPARABLE:
-        return out | {"basis": f"the input cannot be told apart from {_tied(member, changed)}"}
+        return say(f"the input cannot be told apart from {_tied(member, changed, names)}")
     ends = [(1 - INTERVAL) / 2, 1 - (1 - INTERVAL) / 2]
     lo, hi = np.nanquantile(read["draws"][:, j], ends)
     lo_c, hi_c = np.nanquantile(read["draws_on_changes"][:, j], ends)
@@ -224,18 +238,19 @@ def reading(member: Member, target: str, changed: str, held_back: np.ndarray, pl
     if shows:
         way = np.sign(slope * moved)
         if np.sign(shift) == way and way != 0:
-            return out | {"sign": "+" if way > 0 else "-", "basis": "the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way"}
-        return out | {"basis": "the model and the history disagree on the direction"}
+            return say("the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
+        return say("the model and the history disagree on the direction")
     if abs(shift) < STILL * spread(y):
-        return out | {"sign": "0", "basis": "the history shows no effect of the input on the column, and the model moves it by less than a tenth of its spread"}
-    return out | {"basis": "the history shows no effect of the input on the column, and the model moves it"}
+        return say("the history shows no effect of the input on the column, and the model moves it by less than a tenth of its spread", sign="0")
+    return say("the history shows no effect of the input on the column, and the model moves it")
 
 
-def _tied(member: Member, changed: str) -> str:
+def _tied(member: Member, changed: str, read: list[str]) -> str:
     """What an input that does not stand apart goes with: another input by name where one follows it closely, else the rest together."""
     x = member.inputs[changed]
     best, name = 0.0, ""
-    for other, v in member.inputs.items():
+    for other in read:
+        v = member.inputs[other]
         both = ~np.isnan(x) & ~np.isnan(v)
         if other != changed and both.sum() > 2 and np.std(v[both]) > 0 and np.std(x[both]) > 0:
             r = abs(float(np.corrcoef(x[both], v[both])[0, 1]))
@@ -253,5 +268,6 @@ def assumptions() -> list[dict]:
         {"field": "sign", "value": INTERVAL, "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)"},
         {"field": "sign", "value": STILL, "basis": "measured: where the history showed no effect, the model's shift stayed under a tenth of the column's spread on 91% of 17,179 tested series (docs/whatif.md)"},
         {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
+        {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
         {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate; a range between two estimates has no stated coverage"},
     ]

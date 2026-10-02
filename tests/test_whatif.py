@@ -63,3 +63,33 @@ def test_a_drift_two_columns_merely_share_does_not_show_in_the_changes():
     assert abs(np.median(answered) - 2.0) < 0.3
     # On the rows the drifting column shows a slope somewhere, in one direction or the other; on the changes it shows none.
     assert np.median(on_changes) < 0.5 < np.median(on_rows)
+
+
+def _member(stamps, y, inputs, on, ahead=13):
+    """The last `ahead` periods as the plan, and `on` raised there inside what its history holds."""
+    cut = len(stamps) - ahead
+    plan = {c: v[cut:] for c, v in inputs.items()}
+    scenario = plan | {on: np.minimum(plan[on] + 0.2, np.nanmax(inputs[on][:cut]))}
+    return whatif.Member("a", stamps[:cut], stamps[cut:], {"y": y[:cut]}, {c: v[:cut] for c, v in inputs.items()}, plan, scenario)
+
+
+def test_an_input_that_is_mostly_empty_is_not_read_and_the_reason_says_so():
+    stamps, y, x, z = _weekly()
+    starts = whatif.places(np.random.default_rng(1))
+    tenth = np.arange(len(y)) % 10 == 0
+    mostly_empty, some_gaps = np.where(tenth, z, np.nan), np.where(tenth, np.nan, z)
+
+    def read(inputs, on):
+        m = _member(stamps, y, inputs, on)
+        moved = np.nan_to_num(m.scenario[on] - m.plan[on])
+        return whatif.reading(m, "y", on, np.full(13, 50.0), np.full(13, 50.0), 50.0 + 2.0 * moved, starts)
+
+    # Nine rows in ten of one input are empty. Held with the rest it would leave fifteen rows; it is left out, and x is read.
+    got = read({"x": x, "z": z, "markdown": mostly_empty}, "x")
+    assert got["sign"] == "+" and got["basis"].endswith("; not read, being mostly empty: `markdown`")
+    # One row in ten empty: the input is read, at the cost of those rows, and nothing is said.
+    got = read({"x": x, "z": some_gaps}, "x")
+    assert got["sign"] == "+" and "mostly empty" not in got["basis"]
+    # The input asked about is itself mostly empty: no answer.
+    got = read({"x": x, "markdown": mostly_empty}, "markdown")
+    assert got["sign"] == "?" and got["basis"] == "the input is mostly empty in this member's history"

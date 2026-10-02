@@ -178,6 +178,14 @@ values in the rows ahead are ignored.
 An input is a number; a yes-or-no column is read as 1 and 0, and a
 text column as whether there is an entry (a holiday's name).
 
+An empty cell of a number or of a yes-or-no column is unknown to the
+service, not zero and not no. Where empty means something (no
+markdown that week), the caller fills it before sending. An input
+that is empty in more than half of a member's history is not read:
+asked about, it gets `?`; otherwise it is left out of what the
+history's reading holds, and `basis` names it. A row with a gap in an
+input that is read is left out of that reading.
+
 One input differs between `plan` and `scenario`. A request where
 several differ is refused with their names: changing several at
 once was not tested.
@@ -209,7 +217,7 @@ And per member and column, the same on each of its rows:
 |---|---|
 | `sign` | `+` or `-`: the history shows the input moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of the column's spread. `?`: nothing can be said; `basis` says why. |
 | `confidence` | The sign in words: `direction`, `no effect visible`, `not answerable`. |
-| `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the history is too short to read; the history shows nothing and the model moves the column. |
+| `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing and the model moves the column. |
 | `explains` | The share of the column the input explains in this member's history, the other inputs and the calendar held. |
 | `error` | The mean distance of the held-back median from what was recorded, in the column's own units. |
 
