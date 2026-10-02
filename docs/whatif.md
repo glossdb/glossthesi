@@ -97,23 +97,23 @@ gives several, so counts of instances overstate the evidence.
 
 The evaluation sends real tables through the route. Every series
 is cut one horizon before its end; the period after the cut is sent
-as recorded and with one input moved by an ordinary amount. Eleven
+as recorded and with one input moved by an ordinary amount. Twelve
 tables, chosen by the kind of input: a switch someone sets, a
 calendar flag, a count, a price, a forecast, a measured temperature.
 Seven are development tables (retail, electricity prices, electricity
-load, air quality); four were held out (a grocery delivery, a fashion
-retailer, Nord Pool prices, a load competition).
+load, air quality); five were held out (a grocery delivery, a fashion
+retailer, a store chain, Nord Pool prices, a load competition).
 
 Run of 2026-10-02:
 
 | | Development | Held out |
 |---|---|---|
-| Series and columns answered | 219 | 144 |
-| A sign stated | 117 | 50 |
-| No effect visible | 64 | 43 |
-| Not answerable | 38 | 51 |
-| The model agrees where the history shows an effect | 93% of 126 | 96% of 52 |
-| The model stays still where it shows none | 90% of 71 | 81% of 53 |
+| Series and columns answered | 219 | 234 |
+| A sign stated | 117 | 53 |
+| No effect visible | 64 | 69 |
+| Not answerable | 38 | 112 |
+| The model agrees where the history shows an effect | 93% of 126 | 96% of 55 |
+| The model stays still where it shows none | 90% of 71 | 86% of 80 |
 
 What the run showed beyond the counts:
 
@@ -127,7 +127,7 @@ What the run showed beyond the counts:
   disagreements of the run are these two tables: here a disagreement
   says the history's line is the wrong yardstick, not that the model
   is wrong.
-- **A planned input beyond the history.** 27 of the 51 held-out
+- **A planned input beyond the history.** 31 of the 112 held-out
   answers without a sign: the input as recorded after the cut already
   lay above anything before it (the orders of a growing business),
   before any change. The route does not answer there and says that it
@@ -138,6 +138,13 @@ What the run showed beyond the counts:
   answered. Nord Pool's load forecast: the hour, the weekday and the
   season leave 6% of it. One year cannot tell a temperature from the
   time of year.
+- **A mostly empty input.** The store chain's five markdown columns
+  are empty in nine rows of ten. Left out of the history's reading,
+  they no longer stand in the way: a holiday week is read on all 30
+  stores (a sign on 4, no effect visible on 25), where before the
+  rule none could be read. Asked about, a markdown gets no answer on
+  any store. Its fuel price is not told apart from the other inputs
+  and the calendar on 25 of 30.
 - **An input that never moved.** 46 series and columns were not asked
   at all: the input never varied in their history (26 of 30 M5 items
   kept one price), so there was nothing ordinary to change it by.
