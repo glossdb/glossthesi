@@ -1,14 +1,14 @@
 # The release build: the service image, assembled when a v* tag is
 # pushed. A manual dispatch pushes the image by branch and commit — a
 # deployment pins a commit between releases. Same shape as glossql's
-# release: ghcr.io/glossdb/glosskernels:<version> plus :latest at a tag,
+# release: ghcr.io/glossdb/glossthesi:<version> plus :latest at a tag,
 # :<branch> and :sha-<commit> from a dispatch; :latest moves at a tag only.
 # This is not CI (tests.yml is): nothing here runs on push.
 #
 # The image is public on GHCR, so Cloud Run pulls it directly — no
 # Artifact Registry, no project name here. The version is `version` in
 # pyproject.toml, the one bump point: the tag has to match it. Every
-# build bakes `<version>+<commit>` as GLOSSKERNELS_VERSION (/healthz,
+# build bakes `<version>+<commit>` as GLOSSTHESI_VERSION (/healthz,
 # every log line), whichever route built it — so a tag on a commit that
 # already has its :sha-<commit> image does not build again: it names
 # that image, the one that was deployed and tested, :<version> and
@@ -83,7 +83,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker run -d --name kernel -p 8100:8100 -e GLOSSKERNELS_DEVICE=cpu "$IMAGE:${{ steps.version.outputs.sha }}"
+          docker run -d --name kernel -p 8100:8100 -e GLOSSTHESI_DEVICE=cpu "$IMAGE:${{ steps.version.outputs.sha }}"
           for _ in $(seq 60); do
             if health=$(curl -sf http://127.0.0.1:8100/healthz); then break; fi
             sleep 3

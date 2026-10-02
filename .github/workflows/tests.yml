@@ -1,4 +1,4 @@
-# The wire and the parity against the pinned fixtures, on CPU, on every push.
+# The wire in both encodings, the owner, the what-if's reading of a history and the density read against the pinned fixture, on CPU, on every push.
 # The image is release.yml's: built at a v* tag, pushed to GHCR.
 name: tests
 on:
@@ -16,9 +16,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-${{ hashFiles('src/glosskernels/kernels.py', 'src/glosskernels/voices.py') }}
-      - run: uv sync --frozen --group harness --all-extras
+          key: hf-${{ hashFiles('src/glossthesi/kernels.py', 'src/glossthesi/forecast.py') }}
+      - run: uv sync --frozen --all-extras
       - run: uv run pytest -q
         env:
-          GLOSSKERNELS_DEVICE: cpu
+          GLOSSTHESI_DEVICE: cpu
           HF_HUB_DISABLE_TELEMETRY: "1"

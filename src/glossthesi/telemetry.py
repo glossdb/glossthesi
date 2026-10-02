@@ -25,7 +25,7 @@ import sys
 import time
 from typing import Any
 
-log = logging.getLogger("glosskernels")
+log = logging.getLogger("glossthesi")
 
 # Set by `configure()` when the SDK is present and an endpoint is named.
 _METERS: dict[str, Any] = {}
@@ -82,7 +82,7 @@ def configure(version: str) -> dict[str, Any]:
         log.warning("otel_missing", extra={"endpoint": endpoint, "hint": "install the `otel` extra"})
         return {"logs": "stdout", "otlp": None}
 
-    resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", "glosskernels"), "service.version": version})
+    resource = Resource.create({"service.name": os.environ.get("OTEL_SERVICE_NAME", "glossthesi"), "service.version": version})
     traces = TracerProvider(resource=resource)
     traces.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(traces)
@@ -93,17 +93,17 @@ def configure(version: str) -> dict[str, Any]:
     set_logger_provider(logs)
     root.addHandler(LoggingHandler(logger_provider=logs))
 
-    meter = meters.get_meter("glosskernels")
+    meter = meters.get_meter("glossthesi")
     global _TRACER
-    _TRACER = traces.get_tracer("glosskernels")
+    _TRACER = traces.get_tracer("glossthesi")
     _METERS.update(
-        cycles=meter.create_counter("glosskernels.cycles", description="owner cycles"),
-        reads=meter.create_counter("glosskernels.reads", description="reads answered"),
-        cells=meter.create_counter("glosskernels.cells", description="cells answered (float64 values)"),
-        refusals=meter.create_counter("glosskernels.refusals", description="requests refused, by status"),
-        failures=meter.create_counter("glosskernels.failures", description="cycles that raised"),
-        cycle_seconds=meter.create_histogram("glosskernels.cycle.seconds", unit="s", description="device seconds per cycle"),
-        queue_cells=meter.create_gauge("glosskernels.queue.cells", description="cells waiting after the cycle was taken"),
+        cycles=meter.create_counter("glossthesi.cycles", description="owner cycles"),
+        reads=meter.create_counter("glossthesi.reads", description="reads answered"),
+        cells=meter.create_counter("glossthesi.cells", description="cells answered (float64 values)"),
+        refusals=meter.create_counter("glossthesi.refusals", description="requests refused, by status"),
+        failures=meter.create_counter("glossthesi.failures", description="cycles that raised"),
+        cycle_seconds=meter.create_histogram("glossthesi.cycle.seconds", unit="s", description="device seconds per cycle"),
+        queue_cells=meter.create_gauge("glossthesi.queue.cells", description="cells waiting after the cycle was taken"),
     )
     return {"logs": "stdout+otlp", "otlp": endpoint}
 

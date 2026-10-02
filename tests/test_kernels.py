@@ -1,19 +1,16 @@
-"""Parity with the pinned oracle fixtures (fixtures/, copied from the
-port repo — see fixtures/SOURCE): the same package produced them, so the
-reads here reproduce them up to device drift (they were generated on
-CPU)."""
+"""The misfit read against the pinned density oracle (fixtures/, copied
+from the port repo — see fixtures/SOURCE): the same package produced
+it, so the read here reproduces it up to device drift (it was
+generated on CPU)."""
 
-import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from glosskernels.kernels import KernelError, Kernels
+from glossthesi.kernels import KernelError, Kernels
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
-ALPHAS = [0.05, 0.10, 0.50, 0.90, 0.95]
-
 pytestmark = pytest.mark.skipif(not FIXTURES.is_dir(), reason="no fixtures/ in the repo")
 
 
@@ -26,60 +23,6 @@ def _tol(k):
     # CPU reproduces the CPU oracle to float noise; an accelerator drifts
     # in the fourth decimal on standardized values.
     return (1e-5, 1e-6) if k.device == "cpu" else (2e-3, 1e-3)
-
-
-def test_band_point_reproduces_the_pinned_walk(k):
-    walk = np.load(FIXTURES / "bands_walk.npz")
-    pinned = np.load(FIXTURES / "bands_pinned.npz")["bands"]
-    n = int(os.environ.get("GLOSSKERNELS_TEST_FITS", "40"))
-    rtol, atol = _tol(k)
-    flips = 0
-    for i, (_grain, _seed, _months, _t, off, size, _sid) in enumerate(walk["index"][:n]):
-        train_x = walk["train_x_all"][off : off + size]
-        train_y = walk["train_y_all"][off : off + size]
-        actual = float(walk["actual"][i])
-        q, pit = k.band_point(train_x, train_y, walk["test_x"][i], ALPHAS, actual)
-        q = np.asarray(q)
-        scale = max(1.0, float(np.abs(pinned[i]).max()))
-        assert np.allclose(q, pinned[i], rtol=rtol, atol=atol * scale), f"fit {i}: {q} vs {pinned[i]}"
-        assert 0.0 <= pit <= 1.0
-        # The coverage read the harness grades: inside the 80 band or not.
-        lo, hi = sorted((q[1], q[3]))
-        plo, phi = sorted((pinned[i][1], pinned[i][3]))
-        flips += int((lo <= actual <= hi) != (plo <= actual <= phi))
-    assert flips <= (0 if k.device == "cpu" else 1)
-
-
-def test_the_walk_in_one_call_matches_the_pinned_bands(k):
-    """Points grouped by shape and answered a group a forward pass —
-    batching must not move a band."""
-    walk = np.load(FIXTURES / "bands_walk.npz")
-    pinned = np.load(FIXTURES / "bands_pinned.npz")["bands"]
-    n = int(os.environ.get("GLOSSKERNELS_TEST_FITS", "40"))
-    rtol, atol = _tol(k)
-    reads = [
-        (walk["train_x_all"][off : off + size], walk["train_y_all"][off : off + size], walk["test_x"][i][None, :])
-        for i, (_g, _s, _m, _t, off, size, _id) in enumerate(walk["index"][:n])
-    ]
-    for i, (q, grid) in enumerate(k.bands_many(reads, ALPHAS, members=1)):
-        scale = max(1.0, float(np.abs(pinned[i]).max()))
-        assert np.allclose(q[0], pinned[i], rtol=rtol, atol=atol * scale), f"fit {i}: {q[0]} vs {pinned[i]}"
-        assert grid.shape[0] == 1 and np.all(np.diff(grid[0]) >= 0)
-
-
-def test_band_grid_reproduces_the_ensemble_oracle(k):
-    d = np.load(FIXTURES / "e4_walk.npz")
-    oracle = np.load(FIXTURES / "e4_ensemble.npz")["grid_bands"]  # (fits, alphas, rows)
-    rtol, atol = _tol(k)
-    for i in range(int(os.environ.get("GLOSSKERNELS_TEST_GRIDS", "3"))):
-        off, size = (int(v) for v in d["grid_offsets"][i])
-        q = k.band_grid(
-            d["grid_train_x"][off : off + size], d["grid_train_y"][off : off + size], d["grid_test_x"][i], ALPHAS
-        )
-        expect = oracle[i].T  # rows × alphas
-        scale = max(1.0, float(np.abs(expect).max()))
-        assert q.shape == expect.shape
-        assert np.allclose(q, expect, rtol=rtol, atol=atol * scale), f"grid fit {i}"
 
 
 def test_misfit_reproduces_the_density_oracle(k):
@@ -126,3 +69,54 @@ def test_misfit_columns_sum_to_the_score_and_name_the_cell(k):
     assert np.unravel_index(np.argmin(held_shares), held_shares.shape) == (7, 2)
     with pytest.raises(KernelError, match="folds"):
         k.misfit(x[:3], folds=2)
+
+
+def test_misfit_scores_a_category_by_its_probability_given_the_rest(k):
+    # A tax code names the rate; a code that does not match the tax is found through the classifier's conditional.
+    rng = np.random.default_rng(0)
+    n = 120
+    amount = np.round(np.exp(rng.normal(3, 0.7, n)), 2)
+    code = rng.integers(0, 3, n)
+    tax = np.round(amount * np.array([0.19, 0.07, 0.0])[code], 2)
+    x = np.column_stack([amount, code, tax]).astype(np.float64)
+    x[5, 1] = (x[5, 1] + 1) % 3
+    logs, shares = k.misfit(x, columns=True, categorical=[1])
+    assert np.isfinite(logs).all() and shares.shape == x.shape and np.allclose(shares.sum(axis=1), logs, atol=1e-6)
+    assert int(np.argmin(logs)) == 5
+    assert (shares[:, 1] <= 1e-6).all()  # a log probability, never above zero
+    # A categorical column with one category says nothing and is skipped: its share is NaN.
+    x[:, 1] = 0
+    _, shares = k.misfit(x, columns=True, categorical=[1])
+    assert np.isnan(shares[:, 1]).all()
+
+
+def test_strangeness_reads_each_cell_against_its_own_column():
+    from glossthesi.kernels import strangeness
+
+    shares = np.array([[-10.0, -0.1], [-9.0, -0.1], [-11.0, -0.1], [-30.0, -0.1], [-10.0, -3.0], [np.nan, -0.1]])
+    scores, cells = strangeness(shares)
+    # Column 0 swings by a nat and more between ordinary rows: read in units of its spread. Column 1 is tight: read in nats.
+    assert cells[3, 0] < cells[4, 1] < -2.0 and abs(cells[0, 0]) < 1.0 and cells[0, 1] == pytest.approx(0.0)
+    assert int(np.argmin(scores)) == 3 and np.argmin(cells[4]) == 1
+    assert np.isnan(cells[5, 0]) and scores[5] == pytest.approx(0.0)
+    scores, cells = strangeness(np.full((3, 2), np.nan))
+    assert np.isnan(scores).all() and np.isnan(cells).all()
+
+
+def test_the_forecaster_reads_each_series_in_turn_and_moves_with_an_input(k):
+    # TabICL's forecaster as its package ships it, over the weights already loaded (the what-if's model).
+    pytest.importorskip("statsmodels")
+    from glossthesi import whatif
+
+    rng = np.random.default_rng(0)
+    stamps = (np.datetime64("2023-01-02") + np.arange(84) * np.timedelta64(7, "D")).astype("datetime64[ms]")
+    x = (rng.uniform(size=80) < 0.5).astype(np.float64)
+    y = 50.0 + 5.0 * x + rng.normal(0, 0.3, 80)
+    off, on = (whatif.Job(stamps[:80], y, {"x": x}, stamps[80:], {"x": np.full(4, v)}) for v in (0.0, 1.0))
+    empty = whatif.Job(stamps[:0], y[:0], {"x": x[:0]}, stamps[80:], {"x": np.zeros(4)})  # no history at all
+    got = k.series([off, on, empty], [0.1, 0.5, 0.9])
+    assert got[0].shape == got[1].shape == (4, 3) and (np.diff(got[0], axis=1) >= 0).all()
+    # The model has seen y five higher wherever x was on, and predicts it so.
+    assert 3.5 < (got[1][:, 1] - got[0][:, 1]).mean() < 6.5
+    # A series the pipeline refuses fails alone.
+    assert isinstance(got[2], Exception)
