@@ -1,67 +1,117 @@
-# glosskernels
+# glossthesi
 
-The kernel service behind glossql's model doors: the metric-bands
-walk, `whatif.<scenario>()` and `misfit.<frame>()`. The server carries
-no model; it calls this service at `GLOSSQL_TABICL_URL` with the bearer
-in `GLOSSQL_TABICL_TOKEN`. Behind the wire is the reference `tabicl`
-package at a pinned version, the regressor checkpoint loaded once.
+The model service behind glossql: forecasts of time series with
+prediction intervals and the walk that grades them, anomaly detection
+in tables, and which way a column moves under a changed input. The
+server carries no model; it names this service per point and calls
+it over HTTP.
+
+| Task | Route | Model |
+|---|---|---|
+| Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
+| Anomaly detection in a table: errors that break a relation between columns | `/misfit` | TabICL (`tabicl` at a pinned version): the regressor for numeric columns, the classifier for categorical ones |
+| What-if: which way a column moves under a changed input, with the reason, the model's and the history's estimate, and the error on a held-back period (`docs/whatif.md`) | `/whatif` | TabICL's forecaster, as its package ships it, and the series' own history |
+
+There is one forecasting set-up. It was chosen on forecasts a quarter
+and a year ahead, on public and enterprise datasets and on a public
+benchmark (`docs/forecast.md`).
 
 ## Run
 
 ```bash
 uv sync
-uv run glosskernels                 # 127.0.0.1:8100, the machine's best device
-GLOSSKERNELS_KEYS=k1 uv run glosskernels   # a bearer per caller
+GLOSSTHESI_KEYS=k1 uv run glossthesi   # 127.0.0.1:8100, the machine's best device, a bearer per caller
+GLOSSTHESI_INSECURE_OPEN=true uv run glossthesi   # no check at all: a laptop trying it out
 ```
 
 | variable | meaning |
 |---|---|
-| `GLOSSKERNELS_ADDR` | where to listen; default `127.0.0.1:8100` |
-| `GLOSSKERNELS_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
-| `GLOSSKERNELS_AUDIENCE`, `GLOSSKERNELS_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
-| `GLOSSKERNELS_KEYS` | comma-separated bearer keys instead (a laptop, a test host); neither set serves open |
-| `GLOSSKERNELS_VERSION` | the build's name, on `/healthz` and every log line; the image bakes the commit |
+| `GLOSSTHESI_ADDR` | where to listen; default `127.0.0.1:8100` |
+| `GLOSSTHESI_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
+| `GLOSSTHESI_AUDIENCE`, `GLOSSTHESI_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
+| `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host). With neither set the service does not start, and every door refuses |
+| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossql's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
+| `GLOSSTHESI_VERSION` | the build's name, on every answer, on `/healthz` and every log line; the image bakes the commit |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | a collector to send traces, metrics and logs to (OTLP/HTTP); unset, the JSON log lines on stdout are all; the `otel` extra |
-| `GLOSSKERNELS_QUEUE_MB` | what may wait for the GPU, in MB of reads; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |
-| `GLOSSKERNELS_CACHE_MB` | device memory for kept contexts; default two fifths of the GPU (2 GB without one), half of it at most one caller's |
-| `GLOSSKERNELS_MAX_BODY_MB` | the largest body parsed; default 32 (glossql's largest request is under one) — past it a `413` |
-| `GLOSSKERNELS_PRELOAD` | `0` leaves Chronos-2 to its first read; default every voice loads before the port opens |
-| `GLOSSKERNELS_PREPARE_WORKERS` | processes preparing reads beside the model; default the cores but one, at most 8 |
-| `HF_HUB_OFFLINE` | `1` in the image: the checkpoint is baked, nothing is fetched at start |
+| `GLOSSTHESI_QUEUE_MB` | what may wait for the device, in MB of tables; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |
+| `GLOSSTHESI_MAX_BODY_MB` | the largest body parsed; default 32 — past it a `413` |
+| `GLOSSTHESI_PRELOAD` | `0` leaves Chronos-2 to its first forecast; default all models load before the port opens |
+| `GLOSSTHESI_MISFIT_WORKERS` | threads fitting the misfit read's conditionals side by side; default four on CUDA, one elsewhere |
+| `HF_HUB_OFFLINE` | `1` in the image: the checkpoints are baked, nothing is fetched at start |
 
 The checkpoints come from the Hugging Face hub cache (`jingang/TabICL`,
-the v2 regressor; `amazon/chronos-2`, the second voice, loaded on first use). A container bakes it at build (`Dockerfile`); a
-laptop fetches it on first start.
+the v2 regressor and classifier; `amazon/chronos-2`). A container bakes
+them at build (`Dockerfile`); a laptop fetches them on first start.
 
 ## The wire
 
-JSON over HTTP, matrices as nested lists, a `null` where the caller has
-NaN. Every answer is `{"error": …}` with a 4xx when the read is refused,
-by name.
+The contract is `docs/contract.md`. In short: every route takes one
+table and a specification and answers one table and what produced
+it. The table has a row per member and period, a column per value
+and a status per row (`actual`, `plan`, `forecast`). It travels as
+an Arrow IPC stream with the specification as JSON in the schema's
+metadata under `spec`, or as JSON with the table column by column
+beside `spec`; the answer comes back in the request's encoding, its
+`answer` object naming the service, the version and the items that
+failed alone. A refusal is JSON, `{"error": …}` with a 4xx, and names
+the fields to repair where the specification is at fault.
 
-| route | body | answer |
+| route | specification | answer table |
 |---|---|---|
-| `POST /bands` | `alphas`, `reads` (each `train_x`, `train_y`, `test_x` rows × cols — or `context` in place of the train rows — and optionally `actual` and `salt` per test row, `cache`), `members`, `pit_history`, `window` | per read: `quantiles` (rows × alphas), `pit` where an actual was given, `raw` when a `pit_history` was, `context` when kept |
-| `POST /misfit` | `x` (rows × cols), `columns`, `folds` | `scores` (per row; log density, higher fits the frame better) and, with `columns: true`, `columns` (rows × cols; each column's share of the row's score — they sum to it, the lowest names the cell) |
-| `GET /healthz` | | `status`, `version`, `device`, `loaded`, `owner` (its counters and the time of its last cycle) |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed |
+| `POST /misfit` | `categorical`, `cells`, `folds` | a row per frame row: `score`, and with `cells` a column per frame column |
+| `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `owner` |
 
-With `voices` (`tabicl` and any of `chronos2`, `seasonal_naive`) each read
-also carries `history` — the series up to the origin — and optionally
-`horizon` per test row; every voice answers on its own under `voices`,
-beside their `blend`, and `pit_history` is then an object of histories by
-voice, and the blend is of the voices as read through them. `window`
-(1; 12 for a trailing annual total asked for as its own series) picks the
-default record a history is weighed with. Every band read is `/bands`: a walk point is one read of one row with its
-actual, a walk is many reads, a what-if or a projection is a read of many
-rows. `members` 1 (the default) runs the pinned member (one estimator, no
-normalization, no feature shuffle); more runs the package's ensemble of
-that size. With `pit_history` — 100 counts of past PITs per hundredth —
-the quantiles are read through that record and the kernel's default one
-(`glosskernels.calibration`). `misfit` fits and scores the same frame over
-two feature orderings, numeric columns only; with `folds` (2 to 10) each
-row is scored from a context it is not in, at that many times the fits. The tests hold the reads to
-the port repo's pinned oracle fixtures. Where this is going:
-`docs/deployment-design.md`.
+A forecast, in the JSON encoding:
+
+```json
+{
+  "spec": {"targets": ["sales"], "horizon": 3, "levels": [0.1, 0.5, 0.9], "totals": [3], "grain": "month"},
+  "table": {
+    "member": ["north", "north", "north", "north", "north", "north", "north", "north"],
+    "period": ["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"],
+    "status": ["actual", "actual", "actual", "actual", "actual", "actual", "forecast", "forecast"],
+    "sales":  [120, 132, null, 141, 150, 148, null, null],
+    "promotion": [0, 1, 0, 0, 0, 1, 1, 0]
+  }
+}
+```
+
+The six actual rows are the history; `promotion` is a covariate,
+known ahead for the two periods the table carries; the third period
+ahead has no row and its `period` comes back null. The answer's
+table holds nine rows for the periods (three steps by three levels)
+and three for the total, each with the member, the origin
+(`2026-06`), the step, the period, the column and the level.
+
+The walk as glossql declares it: one member per metric, one value
+column, `origins` 6 and `horizon` 1. The answer holds per metric and
+walked period the bands, the actual and the PIT, read against the
+model's own quantile grid before any `width`. The record of PITs
+stays on glossql's side (`docs/forecast.md`, GK-35).
+
+Points that shape a client:
+
+- **Send the members of a dataset in one request.** Members of one
+  shape are forecast together (cross-learning, groups of 100); alone
+  they lose 3 to 4% (GK-26). The shape is the targets and the
+  covariates known ahead.
+- **Several metrics of one entity go as several targets** of one
+  member, answered per column. The forecast is the same as sending
+  them as separate members of one request; a column alone costs 1 to
+  4% (GK-36). A column too short fails alone.
+- **`grain` is needed for the interval of a total** (GK-34). Month
+  and week are measured; day and quarter take the month's dependence
+  until measured.
+- **`width`: keep the record, send nothing yet.** The rule for a
+  width from a dataset's record of forecasts and actual values is
+  `glossthesi.forecast.learned_width`; on records of one to two
+  years it does not pay (GK-35).
+- **`/misfit` reads the frame the caller joins.** A relation is
+  visible only when its columns are in one frame: payments joined to
+  their invoices, order lines to products and plants. Codes go as
+  `categorical`. General anomaly detection is another field and is
+  not offered (GK-23).
 
 ## Hosting
 
@@ -71,17 +121,25 @@ baked. Two stages: uv makes the venv and pulls the checkpoints in the
 first, and the image is the interpreter plus those two trees — no uv,
 no cache, no source. Its size is torch and the CUDA libraries its
 wheels carry (about 3 GiB compressed), plus half a gigabyte of
-checkpoints. Every voice loads before the port opens, so the port is the
+checkpoints. Both models load before the port opens, so the port is the
 readiness signal and a cold start is one number. On SIGTERM what is in
 flight is finished and a request on a kept connection is sent back to
-retry (`503`, `Retry-After`). A cycle that fails (an out-of-memory)
-fails its own callers, hands the device's memory back and leaves the
+retry (`503`, `Retry-After`). A job that fails (an out-of-memory)
+fails its own caller, hands the device's memory back and leaves the
 rate estimate alone. Nothing in it names a provider.
-Production is GCP (`docs/deployment-design.md`); the deployment — the
-project, the region, the collector sidecar, who may call — lives in the
-private deployment repo, not here.
 
-The image is `ghcr.io/glossdb/glosskernels:<version>` (and `:latest`),
+Production is GCP, on an L4 behind Cloud Run; the deployment — the
+project, the region, the collector sidecar, who may call — lives in the
+private deployment repo, not here. What it relies on: the service
+scaled to zero and billed by instance time, the cold start waited out
+by the caller (glossql's call timeout is 600 s); CUDA from torch's
+wheels and the driver from the host, so a torch move is checked
+against the host's driver; one instance until 429s say otherwise;
+authentication by identity at the Cloud Run edge and again in the
+service; the JSON log lines kept by Cloud Logging and, with the
+collector, spans and metrics in Cloud Trace and Cloud Monitoring.
+
+The image is `ghcr.io/glossdb/glossthesi:<version>` (and `:latest`),
 public, from `.github/workflows/release.yml`; Cloud Run pulls it by
 that name. A manual dispatch of the workflow builds the commit and
 pushes `:main` and `:sha-<commit>` — a deployment pins that, and the
@@ -91,83 +149,39 @@ built with it), `git tag v<version> && git push origin v<version>`;
 the tag must match the file, and a commit whose `:sha-` image is up is
 not built again — `:<version>` and `:latest` are pointed at it (a
 commit without an image is built first). Every build bakes
-`<version>+<commit>` as `GLOSSKERNELS_VERSION`, and starts the image
+`<version>+<commit>` as `GLOSSTHESI_VERSION`, and starts the image
 on the runner's CPU to read `/healthz` before it pushes, so a pushed
 image has its checkpoints and its version. `:latest` moves at a tag only.
 
 What the service says about itself (`telemetry.py`): a JSON line on
-stdout per start, per owner cycle (jobs, reads, cells, callers, device
-seconds, what still waits), per refusal (status, caller, route, reason)
-and per failure (with the traceback) — never a payload. A host that
-keeps stdout has that as-is; with `OTEL_EXPORTER_OTLP_ENDPOINT` the same
-goes to a collector as spans (per request, per cycle), counters
-(reads, cycles, refusals by status, failures), a histogram of cycle
-seconds and a gauge of the queue.
+stdout per start, per job (kind, cells, callers, device seconds, what
+still waits), per refusal (status, caller, route, reason) and per
+failure (with the traceback) — never a payload. A host that keeps
+stdout has that as-is; with `OTEL_EXPORTER_OTLP_ENDPOINT` the same
+goes to a collector as spans (per request, per job), counters (jobs,
+refusals by status, failures), a histogram of job seconds and a gauge
+of the queue.
 
 The bench, on any host with a GPU that runs the container:
 
 ```bash
-python -m glosskernels.measure                        # the reads' timings, this device
-python -m glosskernels.measure --context-rows 5000,20000,100000   # cached contexts, concurrent callers
-python -m glosskernels.measure --parity fixtures/     # the pinned oracle here; --amp, --bf16 grade reduced precision
-python -m glosskernels.measure --batching             # small reads riding one pass; --kept the context cache
+python -m glossthesi.measure                      # the reads' timings, this device
+python -m glossthesi.measure --parity fixtures/   # the density oracle here; --amp grades reduced precision
 ```
 
-## The harness
+## Evaluation
 
-What decides which voice is served: every voice walked one step ahead
-over public monthly panels and scored as the witness plane scores a
-band — quantile loss on the door's five alphas, 80/90 coverage, width,
-and the PITs' distance from uniform.
+What each route promises, how it works, what was tested and what was
+found is on a page per route: `docs/forecast.md`, `docs/misfit.md`,
+`docs/whatif.md`.
 
-```bash
-uv sync --group harness                # pandas, pyarrow, chronos-forecasting, synthefy-nori
-uv run python -m glosskernels.harness --panel tourism_monthly --series 60
-uv run python -m glosskernels.harness --panel hospital --voices seasonal_naive,walk:tabicl,chronos2
-# a voice read through its own record: twelve months walked first, the PITs they leave recalibrate the six scored
-uv run python -m glosskernels.harness --panel hospital --burn 12 --voices seasonal_naive,walk:tabicl,cal:walk:tabicl
-# projections: every month a year out from two origins, and the year's total — monthly bands summed against the total called directly
-uv run python -m glosskernels.harness --panel hospital --project 2 --burn 8 \\
-    --voices seasonal_naive,walk:tabicl,chronos2,cal:blend:walk:tabicl+chronos2 --out scores.json
-```
-
-| voice | the context | the model |
-|---|---|---|
-| `seasonal_naive` | the series' own year-over-year moves | none — the floor |
-| `walk:tabicl` | one series' months, the walk's graded recipe | the pinned member (`members: 1`) |
-| `pooled:tabicl` | the panel's recent rows, each series in its own units | the ensemble (`members: 8`) |
-| `walk:nori`, `pooled:nori` | the same two contexts | Synthefy Nori (Apache-2.0) |
-| `chronos2` | each series alone, as a series | Chronos-2 (Apache-2.0) |
-| `seasonal:tabicl` | one series' months, rows anchored on the same month in the last years known — for calls further out | the pinned member |
-| `blend:<voice>+<voice>` | its voices' | the mean of their quantiles, level by level |
-| `cal:<voice>` | the voice's own landed PITs, the panel's together | the voice, its bands re-read at the levels its record puts them, per horizon |
-
-A what-if cannot be graded on a real panel — the pulled world never
-lands — so `--whatif` simulates one whose structure is known (revenue
-is price times volume, the recipe; volume answers price, the behavior)
-and runs the pulled world for the truth: the model's read from the
-panel against replay's arithmetic alone, inside and outside the prices
-the panel has seen, clean and with a demand shock no column holds.
-
-Calibration is the kernel's (`glosskernels.calibration`): a pure
-function of the raw answer and a histogram of the PITs the caller kept,
-added to a default record the kernel ships (`calibration_default.json`,
-rebuilt by `python -m glosskernels.harness.defaults` from tourism_monthly
-and hospital: per voice, one record for months and one for trailing annual
-totals). `cal:<voice>` grades the method on a voice's own record;
-`dcal:<voice>` reads as a deployment would, default record included —
-grade it on the other panels; `blend:dcal:<voice>+dcal:<voice>` is the
-blend as the service forms it. The design for the first deployment is in
-`docs/deployment-design.md`.
-
-Panels: `tourism_monthly`, `hospital`, `car_parts`, `fred_md`, `cif_2016` (the Monash archive
-from the hub) and `synthetic` (no network). Nori wants torch
-under 2.14, and uv resolves every group into one lock, so the `harness`
-group holds the whole lock at 2.13; the parity tests pass on 2.13 and 2.14.
+The evaluation itself is kept in a repository of its own, which is
+not public: the code that sends every route its datasets through the
+HTTP API as a client would, the records of its runs and the tables of
+results. Some of its corpora are licensed.
 
 ## Tests
 
 ```bash
-uv run pytest                          # the wire, and parity against fixtures/
-GLOSSKERNELS_TEST_FITS=374 uv run pytest tests/test_kernels.py   # the whole pinned walk
+uv run pytest                          # the wire in both encodings, the owner, the what-if's reading of a history, and the density read against fixtures/
 ```

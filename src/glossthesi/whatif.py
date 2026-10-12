@@ -1,0 +1,273 @@
+"""The what-if: which way a column moves under a changed input
+(`docs/contract.md`, `/whatif`; what it rests on: `docs/whatif.md`).
+
+Every member is read on its own, and every target on its own.
+
+- TabICL's forecaster predicts the target three times: the last
+  periods of the history from the rows before them (held back, so
+  the error is measured on the caller's own table), the periods
+  ahead with the inputs as planned, and the same under the change.
+- The member's own history is read for how the target moved with
+  the changed input, the other inputs, the trend and the calendar's
+  cycles held: a slope with an interval from resampling, read twice,
+  on the rows and on their changes from one row to the next.
+- The sign is stated where the two agree: the history shows the
+  input moving the target, and the model moves it the same way.
+
+The route promises that direction and no size. The model's shift
+and the history's estimate are both returned; the size lies
+somewhere between them, and the model errs low more often than
+high."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+RESAMPLES = 300
+INTERVAL = 0.90  # of the history's slope, by resampling
+SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
+STILL = 0.10  # a shift under this share of the column's spread counts as none
+MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
+CONTEXT = 4096  # the past periods TabICL's forecaster reads at most
+MIN_HISTORY = 26  # the rows a member needs behind a prediction
+MEDIAN = 0.5
+
+
+class WhatifError(Exception):
+    """A read the what-if refuses for one member or target, with the reason the door reports."""
+
+
+# -- reading the history ---------------------------------------------------------
+
+
+def minutes(stamps: np.ndarray) -> float:
+    """The grain: the usual distance between two rows, in minutes."""
+    return float(np.median(np.diff(stamps).astype("timedelta64[m]").astype(np.float64))) if len(stamps) > 1 else np.inf
+
+
+def run_of_rows(grain: float) -> int:
+    """How many neighbouring rows are drawn together when the history
+    is drawn again: a day on a table finer than daily, two weeks on a
+    daily one, eight weeks on a weekly one, three months on a monthly."""
+    return int(round(24 * 60 / grain)) if grain < 24 * 60 else 14 if grain == 24 * 60 else 8 if grain <= 7 * 24 * 60 else 3
+
+
+def design(stamps: np.ndarray, inputs: np.ndarray) -> np.ndarray:
+    """What is held when the history's slope is read: a level, a
+    trend, the year's cycle, on a daily or finer table the day of the
+    week, on a finer one the hour of the day, and every input (last)."""
+    day = (stamps - stamps.astype("datetime64[Y]")).astype("timedelta64[D]").astype(np.float64)
+    t = np.arange(len(stamps), dtype=np.float64)
+    held = [np.ones(len(stamps)), t / max(len(stamps), 1), *[f(2 * np.pi * k * day / 365.25) for k in (1, 2) for f in (np.sin, np.cos)]]
+    grain = minutes(stamps)
+    if grain <= 24 * 60:
+        weekday = (stamps.astype("datetime64[D]").astype(np.int64) + 3) % 7  # Monday is 0
+        held += [(weekday == d).astype(np.float64) for d in range(1, 7)]
+    if grain < 24 * 60:
+        hour = stamps.astype("datetime64[h]").astype(np.int64) % 24
+        held += [(hour == h).astype(np.float64) for h in range(1, 24)]
+    return np.column_stack([*held, inputs])
+
+
+def places(rng: np.random.Generator) -> np.ndarray:
+    """Where each run of rows starts when the history is drawn again, as a share of the history: the same for every series read with it."""
+    return rng.uniform(size=(RESAMPLES, CONTEXT))
+
+
+def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.ndarray, run: int | None = None) -> dict[str, np.ndarray]:
+    """Per input (the last axis), how `y` moved with it over one
+    series' history, the other inputs, the trend and the cycles held,
+    in units of `y` per unit of the input. Read twice: on the rows as
+    they are (`slope`), and on their changes from one row to the next
+    (`slope_on_changes`); a drift that two columns merely share shows
+    only in the first. With each reading its resamples (`draws`,
+    `draws_on_changes`): the history drawn again in runs of
+    neighbouring rows, since neighbouring rows resemble each other.
+    And how much of the input's own variation the rest leaves
+    unexplained (`free`), and how much of what the rest leaves of `y`
+    the input explains (`explains`). An input that cannot be read is
+    NaN, with `free` at zero."""
+    k = inputs.shape[1]
+    slopes, draws, free, explains = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.zeros(k), np.full(k, np.nan)
+    slopes_c, draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
+    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains}
+    full = design(stamps, inputs)
+    held = full.shape[1] - k
+    keep = ~np.isnan(y) & ~np.isnan(full).any(axis=1)
+    run = run_of_rows(minutes(stamps)) if run is None else run
+    x, seen = full[keep], y[keep]
+    varies = np.std(x[:, held:], axis=0) > 0 if len(seen) else np.zeros(k, dtype=bool)
+    if len(seen) < x.shape[1] + 8 or not varies.any():
+        return out
+
+    def rows(b: int, length: int) -> np.ndarray:
+        size = min(run, length)
+        first = (starts[b, : -(-length // size)] * (length - size + 1)).astype(int)
+        return (first[:, None] + np.arange(size)).ravel()[:length]
+
+    coef = np.linalg.lstsq(x, seen, rcond=None)[0]
+    left = np.sum((seen - x @ coef) ** 2)
+    for j in np.flatnonzero(varies):
+        at = held + j
+        others = np.delete(x, at, axis=1)
+        fitted = others @ np.linalg.lstsq(others, x[:, at], rcond=None)[0]
+        free[j] = float(np.var(x[:, at] - fitted) / np.var(x[:, at]))
+        slopes[j] = coef[at]
+        without = np.sum((seen - others @ np.linalg.lstsq(others, seen, rcond=None)[0]) ** 2)
+        explains[j] = float(1 - left / without) if without > 0 else 0.0
+    # The changes from one row to the next: of the column and of every input; the level, trend and cycles stay.
+    dx, dy = np.column_stack([full[1:, :held], np.diff(full[:, held:], axis=0)]), np.diff(y)
+    keep = ~np.isnan(dy) & ~np.isnan(dx).any(axis=1)
+    dx, dy = dx[keep], dy[keep]
+    moving = varies & (np.std(dx[:, held:], axis=0) > 0) if len(dy) >= dx.shape[1] + 8 else np.zeros(k, dtype=bool)
+    if moving.any():
+        slopes_c[moving] = np.linalg.lstsq(dx, dy, rcond=None)[0][held:][moving]
+    for b in range(RESAMPLES):
+        r = rows(b, len(seen))
+        draws[b, varies] = np.linalg.lstsq(x[r], seen[r], rcond=None)[0][held:][varies]
+        if moving.any():
+            r = rows(b, len(dy))
+            draws_c[b, moving] = np.linalg.lstsq(dx[r], dy[r], rcond=None)[0][held:][moving]
+    return out
+
+
+def spread(y: np.ndarray) -> float:
+    """A column's own spread: its standard deviation, 1 where it has none."""
+    out = np.nanstd(y, ddof=1) if (~np.isnan(y)).sum() > 1 else np.nan
+    return float(out) if np.isfinite(out) and out > 0 else 1.0
+
+
+# -- one member, one target -------------------------------------------------------
+
+
+@dataclass
+class Member:
+    """One member's rows: the history, and the periods ahead as planned and under the change."""
+
+    name: str
+    stamps: np.ndarray  # (n,) the history's periods, datetime64
+    ahead: np.ndarray  # (h,) the periods ahead
+    targets: dict[str, np.ndarray]  # per target, (n,)
+    inputs: dict[str, np.ndarray]  # per input, (n,)
+    plan: dict[str, np.ndarray]  # per input, (h,) as planned
+    scenario: dict[str, np.ndarray]  # per input, (h,) under the change
+
+
+@dataclass
+class Job:
+    """One prediction asked of the forecaster: a history, and the periods to predict with their inputs."""
+
+    stamps: np.ndarray
+    y: np.ndarray
+    inputs: dict[str, np.ndarray]
+    ahead: np.ndarray
+    future: dict[str, np.ndarray]
+
+
+def jobs(member: Member, target: str) -> list[Job]:
+    """The three predictions of one target: held back, as planned, under the change."""
+    h, y = len(member.ahead), member.targets[target]
+    before = {c: v[:-h] for c, v in member.inputs.items()}
+    recorded = {c: v[-h:] for c, v in member.inputs.items()}
+    return [
+        Job(member.stamps[:-h], y[:-h], before, member.stamps[-h:], recorded),
+        Job(member.stamps, y, member.inputs, member.ahead, member.plan),
+        Job(member.stamps, y, member.inputs, member.ahead, member.scenario),
+    ]
+
+
+def reading(member: Member, target: str, changed: str, held_back: np.ndarray, plan: np.ndarray, scenario: np.ndarray, starts: np.ndarray) -> dict:
+    """What can be said about one target of one member. `held_back`,
+    `plan` and `scenario` are the model's medians, per period. The
+    sign, the reason, the history's own estimate of the target under
+    the scenario per period with its interval, how much the input
+    explains, and the error on the held-back periods."""
+    h, y = len(member.ahead), member.targets[target]
+    past = member.inputs[changed]
+    delta = member.scenario[changed] - member.plan[changed]
+    moved = float(np.nanmean(delta)) if (~np.isnan(delta)).any() else 0.0
+    shift = float(np.nanmean(scenario - plan))
+    out = {
+        "sign": "?", "basis": "", "explains": np.nan,
+        "error": float(np.nanmean(np.abs(held_back - y[-h:]))) if (~np.isnan(y[-h:])).any() else np.nan,
+        "history_value": np.full(h, np.nan), "history_low": np.full(h, np.nan), "history_high": np.full(h, np.nan),
+    }  # fmt: skip
+    seen = past[~np.isnan(past)]
+    if not (delta[~np.isnan(delta)] != 0).any():
+        return out | {"sign": "0", "basis": "the input is the same as planned and under the scenario for this member"}
+    # An empty cell is unknown, not zero. An input that is mostly empty is not read: the changed one cannot be
+    # answered, another one is left out of what is held, and the reason says so. A row with a gap in an input
+    # that is read is left out, so an input kept in spite of its gaps costs rows.
+    known = ~np.isnan(y)
+    if known.any() and np.isnan(past[known]).mean() > MOSTLY_EMPTY:
+        return out | {"basis": "the input is mostly empty in this member's history"}
+    there = known & ~np.isnan(past)
+    left_out = [c for c, v in member.inputs.items() if c != changed and there.any() and np.isnan(v[there]).mean() > MOSTLY_EMPTY]
+    names = [c for c in member.inputs if c not in left_out]
+    j = names.index(changed)
+    note = "; not read, being mostly empty: " + ", ".join(f"`{c}`" for c in left_out) if left_out else ""
+
+    def say(basis: str, **more) -> dict:
+        return out | more | {"basis": basis + note}
+
+    if len(seen) < 2 or np.std(seen) == 0:
+        return say("the input never varied in this member's history")
+    asked = member.scenario[changed][~np.isnan(member.scenario[changed])]
+    if (asked > seen.max()).any() or (asked < seen.min()).any():
+        # Said apart: the input as planned may already lie where the history never was, before anything is changed.
+        planned = member.plan[changed][~np.isnan(member.plan[changed])]
+        what = "the input as planned" if (planned > seen.max()).any() or (planned < seen.min()).any() else "the change"
+        return say(f"{what} goes beyond what the history holds: the input lay between {seen.min():g} and {seen.max():g}")
+    read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts)
+    slope, on_changes, free = read["slope"][j], read["slope_on_changes"][j], read["free"][j]
+    if not np.isfinite(slope) or not np.isfinite(on_changes):
+        return say("the history is too short to read how the column moved with the input")
+    out["explains"] = float(read["explains"][j])
+    if free < SEPARABLE:
+        return say(f"the input cannot be told apart from {_tied(member, changed, names)}")
+    ends = [(1 - INTERVAL) / 2, 1 - (1 - INTERVAL) / 2]
+    lo, hi = np.nanquantile(read["draws"][:, j], ends)
+    lo_c, hi_c = np.nanquantile(read["draws_on_changes"][:, j], ends)
+    # The history's estimate per period: the plan's median plus the slope times the change made there.
+    out["history_value"] = plan + slope * delta
+    out["history_low"], out["history_high"] = plan + np.minimum(lo * delta, hi * delta), plan + np.maximum(lo * delta, hi * delta)
+    # The history shows the input moving the column: both readings the same way, neither interval over zero.
+    shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
+    if shows:
+        way = np.sign(slope * moved)
+        if np.sign(shift) == way and way != 0:
+            return say("the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
+        return say("the model and the history disagree on the direction")
+    if abs(shift) < STILL * spread(y):
+        return say("the history shows no effect of the input on the column, and the model moves it by less than a tenth of its spread", sign="0")
+    return say("the history shows no effect of the input on the column, and the model moves it")
+
+
+def _tied(member: Member, changed: str, read: list[str]) -> str:
+    """What an input that does not stand apart goes with: another input by name where one follows it closely, else the rest together."""
+    x = member.inputs[changed]
+    best, name = 0.0, ""
+    for other in read:
+        v = member.inputs[other]
+        both = ~np.isnan(x) & ~np.isnan(v)
+        if other != changed and both.sum() > 2 and np.std(v[both]) > 0 and np.std(x[both]) > 0:
+            r = abs(float(np.corrcoef(x[both], v[both])[0, 1]))
+            if r > best:
+                best, name = r, other
+    return f"the input `{name}`" if best >= 0.9 else "the other inputs and the calendar's cycles"
+
+
+CONFIDENCE = {"+": "direction", "-": "direction", "0": "no effect visible", "?": "not answerable"}
+
+
+def assumptions() -> list[dict]:
+    """What the sign rests on that the model did not produce."""
+    return [
+        {"field": "sign", "value": INTERVAL, "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)"},
+        {"field": "sign", "value": STILL, "basis": "measured: where the history showed no effect, the model's shift stayed under a tenth of the column's spread on 91% of 17,179 tested series (docs/whatif.md)"},
+        {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
+        {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
+        {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate; a range between two estimates has no stated coverage"},
+    ]

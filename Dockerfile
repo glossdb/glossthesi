@@ -3,14 +3,15 @@
 # libraries, so no CUDA base image; the host supplies the driver. On a
 # machine without a GPU the same image serves on CPU.
 #
-#   docker build --build-arg VERSION=$(git rev-parse --short HEAD) -t glosskernels .
-#   docker run --gpus all -p 8100:8100 glosskernels
+#   docker build --build-arg VERSION=$(git rev-parse --short HEAD) -t glossthesi .
+#   docker run --gpus all -p 8100:8100 glossthesi
 #
-# Built by .github/workflows/release.yml as ghcr.io/glossdb/glosskernels,
+# Built by .github/workflows/release.yml as ghcr.io/glossdb/glossthesi,
 # VERSION set to pyproject's version plus the commit; a v* tag names it.
 #
-# What a host sets: GLOSSKERNELS_AUDIENCE and GLOSSKERNELS_CALLERS (or
-# GLOSSKERNELS_KEYS) for the doors, OTEL_EXPORTER_OTLP_ENDPOINT for a
+# What a host sets: GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS (or
+# GLOSSTHESI_KEYS) for the doors, without which the service does not
+# start, OTEL_EXPORTER_OTLP_ENDPOINT for a
 # collector, the queue and cache sizes (README). Nothing here names a
 # project or a region; that is the deployment's, not the image's.
 
@@ -27,7 +28,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --extra auth --extra otel
 COPY src ./src
 RUN uv sync --frozen --no-dev --extra auth --extra otel
-RUN /app/.venv/bin/python -c "from glosskernels.kernels import fetch_checkpoints; fetch_checkpoints()"
+RUN /app/.venv/bin/python -c "from glossthesi.kernels import fetch_checkpoints; fetch_checkpoints()"
 
 # The image: the same interpreter the venv was made against, the venv,
 # the checkpoints, an unprivileged user — two layers of payload and no
@@ -43,7 +44,7 @@ WORKDIR /app
 ARG VERSION=dev
 # The process itself as PID 1, so the host's SIGTERM reaches uvicorn;
 # the checkpoints are baked, nothing is fetched at start.
-ENV GLOSSKERNELS_VERSION=$VERSION GLOSSKERNELS_ADDR=0.0.0.0:8100 \
+ENV GLOSSTHESI_VERSION=$VERSION GLOSSTHESI_ADDR=0.0.0.0:8100 \
     HF_HOME=/app/hf HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
 EXPOSE 8100
-CMD ["/app/.venv/bin/glosskernels"]
+CMD ["/app/.venv/bin/glossthesi"]
