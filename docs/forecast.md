@@ -18,7 +18,9 @@ finding.
 - **A range that holds for the next period.** An 80% interval holds
   close to 80% of the actual values one period ahead. Further ahead
   it holds on weekly data and on the development datasets; on
-  held-out monthly data a year ahead it held 71%.
+  held-out monthly data a year ahead it held 71%. The coverage at
+  every step a caller asks, per grain, is on the evaluation's record
+  (GK-46): the table a caller reads before handing out a range.
 - **Totals from the same forecast.** The total of a quarter or a
   year comes with its own interval, from the periods' intervals.
 - **The walk.** The last periods of a series each forecast one step
@@ -63,7 +65,9 @@ the baseline.
 - **Held-out data,** run after the set-up was decided: 69 monthly
   series in 4 datasets (headcount, product reviews, clinical
   trials), 80 weekly series in 2 datasets (a fashion retailer, a
-  grocery).
+  grocery); for the coverage by step, 87 daily series in 3 datasets
+  (cash machines, a grocery delivery's warehouses, a grocery) and 96
+  quarterly series in 4 (tourism, clinical trials).
 - **A public benchmark:** the 25 tasks of fev-bench that forecast a
   quarter to two years ahead, scored by the benchmark's own package.
 
@@ -77,6 +81,7 @@ the baseline.
 | How dependent are the periods? (GK-45) | The value at which a total's interval holds 0.80: 0.43 ± 0.02 for months (7,816 totals), 0.22 ± 0.04 for weeks (947). Per dataset it runs from 0.0 to 1.0 |
 | Does a total need the grain? (GK-34) | Yes. With the monthly value, weekly totals covered 0.91 to 0.97. With the weekly value: 0.78 and 0.81 |
 | Is the walk calibrated? (GK-42) | Coverage 0.78 to 0.84 at a nominal 0.80; the PITs within 0.05 of uniform, a fifth of them at the edges; within a percent of the backtest that cuts per origin |
+| At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 |
 | Several columns per series? (GK-36) | The same forecast as the columns sent as separate series in one request, to the last digit. A column sent alone costs 1 to 4% on two columns of four |
 | Does the service give the published numbers? | Skill score 38.0% against 38.0% published, first of 14 models; 18 tasks equal to three decimals, the rest within 0.005 |
 | Weekly data? (GK-31) | Loss 0.68 to 0.74 on development data, 0.66 to 0.72 held out; on fev-bench's weekly tasks 42% skill, level with the published model |
@@ -96,6 +101,11 @@ the baseline.
 - **The total of a year on a single dataset:** between 0.47 and 1.00
   where the pooled value is 0.78. One number per grain is the
   default for a caller with no record of its own.
+- **The total of a month on daily data** is far too wide: 0.94
+  where 0.80 is stated, on three held-out daily datasets (GK-46).
+  The day grain takes the monthly dependence, and the errors of
+  consecutive days are far less alike than those of consecutive
+  months. The dependence for days is not measured.
 
 ## What was tried and dropped
 
@@ -129,8 +139,11 @@ the baseline.
 
 - **Timing on a server GPU** (GK-20). On the laptop Chronos-2 runs
   on the CPU.
-- **Daily and quarterly data from our own corpora,** and the
-  dependence of a total for those grains.
+- **The dependence of a total for daily and quarterly data.** Both
+  take the monthly value; with it the year's total of quarters
+  covered 0.84 on held-out data and the month's total of days 0.94
+  (GK-46). Daily data from our own corpora: none of the held-out
+  corpora has a day-exact table.
 - **Five benchmark tasks** of more than 5,000 forecasts each.
 
 ## What could come next
