@@ -169,6 +169,20 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     assert daily["grain"] == "day" and daily["basis"].startswith("assumed")
 
 
+def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(client):
+    # The periods are timestamps: the error's origin is one, said as text, since the answer object is JSON.
+    import datetime
+
+    table = _table(a={"sales": HISTORY, "orders": [3] * 8}, b={"sales": HISTORY, "orders": [None] * 6 + [1, 2]})
+    table["period"] = [datetime.datetime(2024, p, 1) for p in table["period"]]
+    r = client.arrow("/forecast", SPEC | {"targets": ["sales", "orders"]}, table)
+    assert r.status_code == 200, r.text
+    back = pa.ipc.open_stream(r.content).read_all()
+    assert pa.types.is_timestamp(back.schema.field("origin").type) and back.num_rows == 36  # three columns answered, each 3 steps by 3 levels and the total of 3
+    assert json.loads(back.schema.metadata[b"answer"])["errors"] == [{"member": "b", "origin": "2024-08-01T00:00:00", "column": "orders", "error": "2 known values of column 1 of the history: a forecast needs 6"}]
+    assert wire.clean({"a": datetime.date(2024, 8, 1), "b": np.datetime64("2024-08"), "c": [datetime.datetime(2024, 8, 1, 12, 30)]}) == {"a": "2024-08-01", "b": "2024-08", "c": ["2024-08-01T12:30:00"]}
+
+
 def test_the_arrow_encoding_answers_the_same_as_json(client):
     table = _table(a=HISTORY, b=[3] * 8)
     r = client.arrow("/forecast", SPEC, table)
