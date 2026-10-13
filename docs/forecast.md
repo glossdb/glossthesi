@@ -81,6 +81,7 @@ the baseline.
 | How dependent are the periods? (GK-45) | The value at which a total's interval holds 0.80: 0.43 ± 0.02 for months (7,816 totals), 0.22 ± 0.04 for weeks (947). Per dataset it runs from 0.0 to 1.0 |
 | Does a total need the grain? (GK-34) | Yes. With the monthly value, weekly totals covered 0.91 to 0.97. With the weekly value: 0.78 and 0.81 |
 | Is the walk calibrated? (GK-42) | Coverage 0.78 to 0.84 at a nominal 0.80; the PITs within 0.05 of uniform, a fifth of them at the edges; within a percent of the backtest that cuts per origin |
+| Does a covariate moved ahead move the forecast as the member's history says? (GK-47) | The direction: on 88% and 95% of the series whose history shows an effect (the what-if's tables, development and held out), against 93% and 96% for the what-if route on the same series. The size: about half the history's where the what-if's model had it right (a promotion, a discount), 0.51 and 0.24 at the median over all. Where the history shows no effect the forecast still moves, by a tenth of the column's spread, on 31% and 51% of the series |
 | At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 |
 | Several columns per series? (GK-36) | The same forecast as the columns sent as separate series in one request, to the last digit. A column sent alone costs 1 to 4% on two columns of four |
 | Does the service give the published numbers? | Skill score 38.0% against 38.0% published, first of 14 models; 18 tasks equal to three decimals, the rest within 0.005 |
@@ -101,6 +102,10 @@ the baseline.
 - **The total of a year on a single dataset:** between 0.47 and 1.00
   where the pooled value is 0.78. One number per grain is the
   default for a caller with no record of its own.
+- **A covariate moved ahead** moves the forecast whether or not the
+  member's own history says it should, and by about half the
+  history's size where it does (GK-47). The route carries the plan's
+  world; a lever's effect is the what-if's question.
 - **The total of a month on daily data** is far too wide: 0.94
   where 0.80 is stated, on three held-out daily datasets (GK-46).
   The day grain takes the monthly dependence, and the errors of
@@ -125,7 +130,9 @@ the baseline.
 
 - **A request holds series that belong together:** the metrics of
   one company, the stores of one chain.
-- **A member needs 6 known values** of a target behind an origin.
+- **A member needs 6 known values** of a target behind an origin. A
+  column that has fewer fails alone, and the error names its origin
+  in the table's own type, said as text where it is a date.
 - **Name the grain** when a total is asked on data that is not
   monthly. Only the interval of a total uses it.
 - **Keep the record** of forecasts and the actual values that land
