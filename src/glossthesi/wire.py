@@ -15,6 +15,7 @@ as missing, and a column of text or booleans is a category."""
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import math
@@ -125,9 +126,16 @@ def encode(table: pa.Table, answer: dict[str, Any], encoding: str) -> tuple[byte
 
 
 def clean(value: Any) -> Any:
-    """Arrays to lists, non-finite floats to null: JSON has no NaN."""
+    """Arrays to lists, non-finite floats to null, dates and times to
+    their ISO text: JSON has no NaN and no date. A table's period of
+    any type can be named in the answer object (an error names its
+    origin)."""
     if isinstance(value, np.ndarray):
         return clean(value.tolist())
+    if isinstance(value, np.datetime64):
+        return str(value)
+    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
+        return value.isoformat()
     if isinstance(value, (list, tuple)):
         return [clean(v) for v in value]
     if isinstance(value, dict):
