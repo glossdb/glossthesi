@@ -19,8 +19,8 @@ finding.
   close to 80% of the actual values one period ahead. Further ahead
   it holds on weekly data and on the development datasets; on
   held-out monthly data a year ahead it held 71%. The coverage at
-  every step a caller asks, per grain, is on the evaluation's record
-  (GK-46): the table a caller reads before handing out a range.
+  every step a caller asks, per grain, rides on every answer (GK-46,
+  `coverage`): the table a caller reads before handing out a range.
 - **Totals from the same forecast.** The total of a quarter or a
   year comes with its own interval, from the periods' intervals.
 - **The walk.** The last periods of a series each forecast one step
@@ -50,6 +50,13 @@ finding.
 5. **The walk** (GK-42): with `origins`, each of the last periods is
    forecast from the history before it. The PIT is read against the
    model's own 21 quantile levels, by linear interpolation.
+6. **How often the bands held** (GK-46): every answer carries, per
+   step and span and per band the request's levels form, the share of
+   actual values that landed inside such a band on held-out data at
+   that grain, with the points behind it (`coverage.py`). A span's
+   share was measured at the dependence of its grain, so a grain whose
+   dependence moves serves its steps and no spans until the table is
+   measured again.
 
 ## What was tested
 
@@ -83,7 +90,7 @@ the baseline.
 | Does a total need the grain? (GK-34) | Yes. With the monthly value, weekly totals covered 0.91 to 0.97. With the weekly value: 0.78 and 0.81 |
 | Is the walk calibrated? (GK-42) | Coverage 0.78 to 0.84 at a nominal 0.80; the PITs within 0.05 of uniform, a fifth of them at the edges; within a percent of the backtest that cuts per origin |
 | Does a covariate moved ahead move the forecast as the member's history says? (GK-47) | The direction: on 88% and 95% of the series whose history shows an effect (the what-if's tables, development and held out), against 93% and 96% for the what-if route on the same series. The size: about half the history's where the what-if's model had it right (a promotion, a discount), 0.51 and 0.24 at the median over all. Where the history shows no effect the forecast still moves, by a tenth of the column's spread, on 31% and 51% of the series |
-| At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 at the monthly dependence the day grain took then (GK-48 gives it its own) |
+| At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 at the monthly dependence the day grain took then. Read again at the day's and the quarter's own dependence (GK-48), what the service serves: the calendar month's total 0.79, the year's total 0.80, both fits on the datasets the value was fitted on; every other entry unchanged |
 | Several columns per series? (GK-36) | The same forecast as the columns sent as separate series in one request, to the last digit. A column sent alone costs 1 to 4% on two columns of four |
 | Does the service give the published numbers? | Skill score 38.0% against 38.0% published, first of 14 models; 18 tasks equal to three decimals, the rest within 0.005 |
 | Weekly data? (GK-31) | Loss 0.68 to 0.74 on development data, 0.66 to 0.72 held out; on fev-bench's weekly tasks 42% skill, level with the published model |
