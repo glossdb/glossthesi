@@ -75,7 +75,7 @@ answer's `period` is null there.
 | `horizon` | Periods ahead, 1 to 1024. | required, except with `origins`, where it is 1 |
 | `levels` | The quantile levels asked for, each strictly between 0 and 1. | required |
 | `totals` | Spans in periods: for each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain; the answer's `assumptions` names the value and on what data it was measured (`docs/forecast.md`, GK-45, GK-48). | none |
-| `grain` | `month`, `week`, `day` or `quarter`: only the interval of a total depends on it. Month and week are measured; day and quarter take the monthly value, and the answer says so. | `month` |
+| `grain` | `month`, `week`, `day` or `quarter`: only the interval of a total depends on it, and `coverage` reads the grain's table. Every grain's dependence is measured, and the answer says on what data (GK-45, GK-48). | `month` |
 | `width` | The distance of every quantile from the median is multiplied by it after the model has answered, for a caller whose record says this dataset's intervals run too narrow or too wide: one number, or one per period ahead. The rule for learning it from a record is `glossthesi.forecast.learned_width` (GK-35). | 1 |
 | `origins` | The walk, or a backtest: a number k, the last k actual periods of every member each taken as an origin; or a list of periods, the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it, with the covariates' later values taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT. | one forecast per member, from its last actual period |
 
@@ -101,6 +101,22 @@ member, the column and the origin named, and the other rows are
 answered. A member needs 6 known values of a target behind an
 origin. What the model itself refuses fails the members forecast with
 it and no others.
+
+**The answer object** carries `coverage` beside `errors` and
+`assumptions`: how often the bands the request's levels form held on
+held-out data, at this grain (`docs/forecast.md`, GK-46). One entry
+per step of the horizon and per span asked, per band: `step`, `span`
+(null for a period), `low` and `high` (the levels that bound the
+band), `share` (the actual values inside it) and `points` (how many
+the share counts). The bands measured are 0.10 to 0.90 and 0.05 to
+0.95; a band the levels do not form, a step past the table (12
+months, 13 weeks, 31 days, 4 quarters) and a span at a dependence
+other than the one it was measured at have no entry. The spans of
+days and quarters stand at a dependence fitted on the same datasets
+(GK-48), so their shares are fits, not held-out readings;
+`assumptions` names the basis. The shares are pooled over datasets: a
+caller whose own record of forecasts and actual values is long enough
+reads that first.
 
 **The walk as glossql declares it.** One member per metric, one
 value column, no covariates, `origins` 6, `horizon` 1, the levels of

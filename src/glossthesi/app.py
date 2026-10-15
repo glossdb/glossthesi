@@ -45,7 +45,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import forecast, kernels, telemetry, whatif, wire
+from . import coverage, forecast, kernels, telemetry, whatif, wire
 from .owner import Busy, Owner, TooLarge
 from .wire import Refusal
 
@@ -412,7 +412,7 @@ class Forecast:
         )
         for e in errors:
             telemetry.refused(422, caller, "/forecast", e["error"])
-        answer: dict[str, Any] = {"errors": errors}
+        answer: dict[str, Any] = {"errors": errors, "coverage": coverage.held(plan.grain, plan.horizon, plan.spans, plan.levels)}
         if plan.spans:
             answer["assumptions"] = [forecast.dependence(plan.grain)]
         return table, answer

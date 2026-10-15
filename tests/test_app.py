@@ -14,7 +14,7 @@ import pyarrow as pa
 import pytest
 
 from glossthesi import app as app_module
-from glossthesi import forecast, kernels, wire
+from glossthesi import coverage, forecast, kernels, wire
 
 
 class FakeChronos(forecast.Chronos2):
@@ -177,6 +177,40 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     assert narrowest[1] == pytest.approx(25.5) and narrowest[2] - narrowest[1] < values[2] - values[1]
 
 
+def test_the_answer_says_how_often_its_bands_held(client, monkeypatch):
+    # One band from the levels asked (0.1 to 0.9), at each of the three steps and at the span: the
+    # held-out table's own numbers for months.
+    got = client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]["coverage"]
+    steps, spans = [e for e in got if e["span"] is None], [e for e in got if e["span"] is not None]
+    assert [e["step"] for e in steps] == [1, 2, 3] and [(e["step"], e["span"]) for e in spans] == [(3, 3)]
+    assert all(e["low"] == 0.1 and e["high"] == 0.9 for e in got)
+    assert [(e["share"], e["points"]) for e in steps] == [(row[0], row[2]) for row in coverage.HELD["month"]["steps"][:3]]
+    assert (spans[0]["share"], spans[0]["points"]) == (coverage.HELD["month"]["spans"][2][0], coverage.HELD["month"]["spans"][2][2])
+    # Both bands where both pairs of levels are asked, the 90% one from the second share.
+    both = client.send("/forecast", SPEC | {"levels": [0.05, 0.1, 0.5, 0.9, 0.95], "totals": []}, _table(a=HISTORY)).json()["answer"]["coverage"]
+    assert [(e["step"], e["low"], e["high"]) for e in both] == [(s, lo, hi) for s in (1, 2, 3) for lo, hi in ((0.1, 0.9), (0.05, 0.95))]
+    assert both[1]["share"] == coverage.HELD["month"]["steps"][0][1]
+    # A band the levels do not form has no entry; a step past the table has none; another grain reads its own rows.
+    assert client.send("/forecast", SPEC | {"levels": [0.2, 0.8]}, _table(a=HISTORY)).json()["answer"]["coverage"] == []
+    far = client.send("/forecast", SPEC | {"horizon": 24, "totals": []}, _table(a=LONG)).json()["answer"]["coverage"]
+    assert [e["step"] for e in far] == list(range(1, 13))
+    weekly = client.send("/forecast", SPEC | {"grain": "week"}, _table(a=HISTORY)).json()["answer"]["coverage"]
+    assert weekly[0]["share"] == coverage.HELD["week"]["steps"][0][0] and weekly[-1]["span"] == 3
+    # The walk's one step ahead carries the first step's share.
+    walk = client.send("/forecast", {"targets": ["y"], "origins": 2, "levels": [0.1, 0.5, 0.9]}, _table(a=LONG)).json()["answer"]["coverage"]
+    assert [(e["step"], e["span"]) for e in walk] == [(1, None)]
+    # A span's share was measured at its grain's dependence: a grain that combines with another value
+    # serves its steps and no spans until the table is measured again.
+    daily = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
+    assert len(daily) == 3 + (1 if forecast.DEPENDENCE["day"] == coverage.MEASURED_AT["day"] else 0)
+    monkeypatch.setitem(forecast.DEPENDENCE, "day", coverage.MEASURED_AT["day"] + 0.1)
+    moved = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
+    assert [e["span"] for e in moved] == [None, None, None]
+    monkeypatch.setitem(forecast.DEPENDENCE, "day", coverage.MEASURED_AT["day"])
+    measured = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
+    assert [e["span"] for e in measured] == [None, None, None, 3] and measured[-1]["share"] == coverage.HELD["day"]["spans"][2][0]
+
+
 def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(client):
     # The periods are timestamps: the error's origin is one, said as text, since the answer object is JSON.
     import datetime
@@ -197,7 +231,7 @@ def test_the_arrow_encoding_answers_the_same_as_json(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith(wire.ARROW), r.text
     back = pa.ipc.open_stream(r.content).read_all()
     answer = json.loads(back.schema.metadata[b"answer"])
-    assert answer == {"service": "glossthesi", "version": "dev", "errors": [], "assumptions": [forecast.dependence("month")]}
+    assert answer == {"service": "glossthesi", "version": "dev", "errors": [], "coverage": coverage.held("month", 3, [3], SPEC["levels"]), "assumptions": [forecast.dependence("month")]}
     assert back.schema.field("origin").type == pa.int64() and back.schema.field("period").type == pa.int64()
     listed = {name: back.column(name).to_pylist() for name in back.column_names}
     as_json = client.send("/forecast", SPEC, table).json()

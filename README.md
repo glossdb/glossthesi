@@ -58,7 +58,7 @@ the fields to repair where the specification is at fault.
 
 | route | specification | answer table |
 |---|---|---|
-| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed; the answer object's `coverage` says how often each band held on held-out data at that grain and step |
 | `POST /misfit` | `categorical`, `cells`, `folds` | a row per frame row: `score`, and with `cells` a column per frame column |
 | `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `owner` |
 
