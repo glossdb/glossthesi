@@ -37,12 +37,12 @@ finding.
    ahead carry them. Nothing is recalibrated.
 2. **Several target columns of one member** are one multivariate
    series (GK-36).
-3. **A total** (GK-27, GK-34, GK-45). Its median is the sum of the
-   periods' medians. Its interval combines the periods' intervals as
-   partly dependent, by one number per grain: 0.43 for months and
-   0.22 for weeks, both measured. Days and quarters take the monthly
-   value. Every answer with a total says which value it used and
-   whether it was measured for that grain.
+3. **A total** (GK-27, GK-34, GK-45, GK-48). Its median is the sum of
+   the periods' medians. Its interval combines the periods' intervals
+   as partly dependent, by one number per grain, each measured: 0.43
+   for months, 0.22 for weeks, 0.12 for days, 0.25 for quarters.
+   Every answer with a total says which value it used and on what
+   data it was measured.
 4. **`width`** (GK-35): a factor from the caller, applied to every
    quantile's distance from the median after the model has answered.
    For a caller whose own record says the intervals run too narrow
@@ -79,10 +79,11 @@ the baseline.
 | Do the intervals hold on held-out data? (GK-28) | The next month: 0.79. Months of the quarter: 0.74. Months of the year: 0.71. Weekly: 0.75 for the next week, 0.80 and 0.82 for the weeks of the quarter and the year |
 | Is the total right? (GK-27) | With the periods taken as partly dependent the 80% interval of a year's total covered 0.78 on enterprise data (1,293 points). Added up as fully dependent: 0.88. As independent: 0.41. Forecasting the series of trailing sums, as before: 0.64 |
 | How dependent are the periods? (GK-45) | The value at which a total's interval holds 0.80: 0.43 ± 0.02 for months (7,816 totals), 0.22 ± 0.04 for weeks (947). Per dataset it runs from 0.0 to 1.0 |
+| How dependent are days and quarters? (GK-48) | 0.12 ± 0.01 for days (421 calendar-month totals), 0.25 ± 0.06 for quarters (864 year totals), measured on the held-out daily and quarterly datasets, the only ones there are. Fitted on the other datasets and read on the one left out, the month's total of days covers 0.81 and the year's total of quarters 0.81. Per dataset 0.09 to 0.23 for days, 0.17 to 1.0 for quarters |
 | Does a total need the grain? (GK-34) | Yes. With the monthly value, weekly totals covered 0.91 to 0.97. With the weekly value: 0.78 and 0.81 |
 | Is the walk calibrated? (GK-42) | Coverage 0.78 to 0.84 at a nominal 0.80; the PITs within 0.05 of uniform, a fifth of them at the edges; within a percent of the backtest that cuts per origin |
 | Does a covariate moved ahead move the forecast as the member's history says? (GK-47) | The direction: on 88% and 95% of the series whose history shows an effect (the what-if's tables, development and held out), against 93% and 96% for the what-if route on the same series. The size: about half the history's where the what-if's model had it right (a promotion, a discount), 0.51 and 0.24 at the median over all. Where the history shows no effect the forecast still moves, by a tenth of the column's spread, on 31% and 51% of the series |
-| At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 |
+| At which steps does the 80% interval hold, on held-out data? (GK-46) | Weeks: 0.79 to 0.84 at each of 13 steps, 0.85 for the quarter's total. Quarters: 0.79 to 0.82 at each of 4 steps, 0.84 for the year's total. Months: 0.75 one month ahead, 0.67 at twelve, no step at 0.80; 0.72 and 0.67 for the quarter's and the year's total. Days: 0.79 one day ahead, 0.70 to 0.80 from four to thirty-one days; the calendar month's total 0.94 at the monthly dependence the day grain took then (GK-48 gives it its own) |
 | Several columns per series? (GK-36) | The same forecast as the columns sent as separate series in one request, to the last digit. A column sent alone costs 1 to 4% on two columns of four |
 | Does the service give the published numbers? | Skill score 38.0% against 38.0% published, first of 14 models; 18 tasks equal to three decimals, the rest within 0.005 |
 | Weekly data? (GK-31) | Loss 0.68 to 0.74 on development data, 0.66 to 0.72 held out; on fev-bench's weekly tasks 42% skill, level with the published model |
@@ -106,11 +107,14 @@ the baseline.
   member's own history says it should, and by about half the
   history's size where it does (GK-47). The route carries the plan's
   world; a lever's effect is the what-if's question.
-- **The total of a month on daily data** is far too wide: 0.94
-  where 0.80 is stated, on three held-out daily datasets (GK-46).
-  The day grain takes the monthly dependence, and the errors of
-  consecutive days are far less alike than those of consecutive
-  months. The dependence for days is not measured.
+- **The dependence of days and quarters rests on few datasets,** all
+  held out, since no other daily or quarterly data exists (GK-48):
+  three daily, four quarterly. Per dataset the value runs from 0.09
+  to 0.23 for days and from 0.17 to 1.0 for quarters. At the value
+  the other datasets give, a grocery delivery's month totals cover
+  0.72 (36 totals) and the clinical trials' year totals 0.56 and
+  0.71 (72 each), where the cash machines, the grocery and the
+  tourism sets cover 0.81 to 0.84.
 
 ## What was tried and dropped
 
@@ -146,11 +150,10 @@ the baseline.
 
 - **Timing on a server GPU** (GK-20). On the laptop Chronos-2 runs
   on the CPU.
-- **The dependence of a total for daily and quarterly data.** Both
-  take the monthly value; with it the year's total of quarters
-  covered 0.84 on held-out data and the month's total of days 0.94
-  (GK-46). Daily data from our own corpora: none of the held-out
-  corpora has a day-exact table.
+- **A reading of the day and quarter dependence on data outside the
+  fit.** None exists: every daily and quarterly dataset went into
+  it. Leaving one dataset out stands in (GK-48). Daily data from our
+  own corpora: none of the held-out corpora has a day-exact table.
 - **Five benchmark tasks** of more than 5,000 forecasts each.
 
 ## What could come next

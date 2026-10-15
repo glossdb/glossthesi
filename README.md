@@ -100,9 +100,10 @@ Points that shape a client:
   member, answered per column. The forecast is the same as sending
   them as separate members of one request; a column alone costs 1 to
   4% (GK-36). A column too short fails alone.
-- **`grain` is needed for the interval of a total** (GK-34). Month
-  and week are measured; day and quarter take the month's dependence
-  until measured.
+- **`grain` is needed for the interval of a total** (GK-34). All four
+  grains are measured, month and week on development data, day and
+  quarter on the held-out data that is the only daily and quarterly
+  data (GK-45, GK-48).
 - **`width`: keep the record, send nothing yet.** The rule for a
   width from a dataset's record of forecasts and actual values is
   `glossthesi.forecast.learned_width`; on records of one to two

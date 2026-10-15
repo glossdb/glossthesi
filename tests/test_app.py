@@ -165,8 +165,16 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     # A total's answer declares the dependence it rests on and where it comes from.
     assert got["answer"]["assumptions"] == [{"field": "totals", "grain": "month", "dependence": forecast.DEPENDENCE["month"], "basis": forecast.dependence("month")["basis"]}]
     assert weekly["answer"]["assumptions"][0]["dependence"] == forecast.DEPENDENCE["week"] and weekly["answer"]["assumptions"][0]["basis"].startswith("measured")
-    daily = client.send("/forecast", SPEC | {"grain": "day"}, _table(a=HISTORY)).json()["answer"]["assumptions"][0]
-    assert daily["grain"] == "day" and daily["basis"].startswith("assumed")
+    # Days and quarters have a value of their own, measured on held-out data, there being no other daily or
+    # quarterly data, and the basis says so; a day's total is the narrowest of all.
+    daily = client.send("/forecast", SPEC | {"grain": "day"}, _table(a=HISTORY)).json()
+    quarterly = client.send("/forecast", SPEC | {"grain": "quarter"}, _table(a=HISTORY)).json()
+    for grain, by_grain in (("day", daily), ("quarter", quarterly)):
+        said = by_grain["answer"]["assumptions"][0]
+        assert said["grain"] == grain and said["dependence"] == forecast.DEPENDENCE[grain]
+        assert said["basis"].startswith("measured") and "held-out" in said["basis"]
+    narrowest = [row["value"] for row in _rows(daily, span=3)]
+    assert narrowest[1] == pytest.approx(25.5) and narrowest[2] - narrowest[1] < values[2] - values[1]
 
 
 def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(client):
