@@ -3,7 +3,8 @@ name = "glossthesi"
 version = "0.2.0"
 description = "The model service behind glossql: forecasts and the walk by Chronos-2, anomaly detection and the what-if by TabICL, over HTTP"
 requires-python = ">=3.13,<3.14"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 dependencies = [
     # Pinned: the oracle fixtures in the port repo were generated with
     # 2.1.1 and 2.2.0 reproduces them (same checkpoints); a move re-runs
