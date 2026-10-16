@@ -10,9 +10,14 @@ Every member is read on its own, and every target on its own.
 - The member's own history is read for how the target moved with
   the changed input, the other inputs, the trend and the calendar's
   cycles held: a slope with an interval from resampling, read twice,
-  on the rows and on their changes from one row to the next.
+  on the rows and on their changes from one row to the next. Several
+  inputs changed at once are read together: the history's estimate
+  is the sum of what each does, its interval from the same draws
+  summed the same way, so an interaction between two inputs is not
+  something the history reads.
 - The sign is stated where the two agree: the history shows the
-  input moving the target, and the model moves it the same way.
+  input, or the inputs together, moving the target, and the model
+  moves it the same way.
 
 The route promises that direction and no size. The model's shift
 and the history's estimate are both returned; the size lies
@@ -76,7 +81,7 @@ def places(rng: np.random.Generator) -> np.ndarray:
     return rng.uniform(size=(RESAMPLES, CONTEXT))
 
 
-def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.ndarray, run: int | None = None) -> dict[str, np.ndarray]:
+def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.ndarray, run: int | None = None, together: list[int] | None = None) -> dict[str, np.ndarray]:
     """Per input (the last axis), how `y` moved with it over one
     series' history, the other inputs, the trend and the cycles held,
     in units of `y` per unit of the input. Read twice: on the rows as
@@ -87,12 +92,14 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
     neighbouring rows, since neighbouring rows resemble each other.
     And how much of the input's own variation the rest leaves
     unexplained (`free`), and how much of what the rest leaves of `y`
-    the input explains (`explains`). An input that cannot be read is
-    NaN, with `free` at zero."""
+    the input explains (`explains`); with `together`, the indices of
+    inputs changed at once, how much they explain as a set
+    (`explains_together`). An input that cannot be read is NaN, with
+    `free` at zero."""
     k = inputs.shape[1]
     slopes, draws, free, explains = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.zeros(k), np.full(k, np.nan)
     slopes_c, draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
-    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains}
+    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan}
     full = design(stamps, inputs)
     held = full.shape[1] - k
     keep = ~np.isnan(y) & ~np.isnan(full).any(axis=1)
@@ -117,6 +124,10 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
         slopes[j] = coef[at]
         without = np.sum((seen - others @ np.linalg.lstsq(others, seen, rcond=None)[0]) ** 2)
         explains[j] = float(1 - left / without) if without > 0 else 0.0
+    if together and all(varies[j] for j in together):
+        others = np.delete(x, [held + j for j in together], axis=1)
+        without = np.sum((seen - others @ np.linalg.lstsq(others, seen, rcond=None)[0]) ** 2)
+        out["explains_together"] = float(1 - left / without) if without > 0 else 0.0
     # The changes from one row to the next: of the column and of every input; the level, trend and cycles stay.
     dx, dy = np.column_stack([full[1:, :held], np.diff(full[:, held:], axis=0)]), np.diff(y)
     keep = ~np.isnan(dy) & ~np.isnan(dx).any(axis=1)
@@ -131,6 +142,39 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
             r = rows(b, len(dy))
             draws_c[b, moving] = np.linalg.lstsq(dx[r], dy[r], rcond=None)[0][held:][moving]
     return out
+
+
+def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
+    """Whether a row of `ahead` (periods, inputs), a combination of
+    several inputs, lies farther from every row of `past` (rows,
+    inputs) than the loneliest past row lies from its own nearest
+    neighbour, each input scaled by its spread in the past: the range
+    check per input does not see a combination the history never held
+    (a promotion and a holiday that never fell together, a price never
+    cut while the promotion was on). The reach is the history's own,
+    with no number to choose: where every combination of switches has
+    a duplicate it is zero and an unseen one is beyond; where the
+    history is sparse everywhere, near is as near as it gets. Rows
+    with a gap are left out."""
+    past = past[~np.isnan(past).any(axis=1)]
+    ahead = ahead[~np.isnan(ahead).any(axis=1)]
+    if len(past) < 2 or not len(ahead):
+        return False
+    scale = np.std(past, axis=0, ddof=1)
+    scale[~(scale > 0)] = 1.0
+    p, a = past / scale, ahead / scale
+
+    def nearest(rows: np.ndarray, own: bool) -> np.ndarray:
+        out = np.full(len(rows), np.inf)
+        for lo in range(0, len(rows), 256):  # in blocks: the history holds up to 4,096 rows
+            d2 = ((rows[lo : lo + 256, None, :] - p[None, :, :]) ** 2).sum(axis=-1)
+            if own:
+                d2[np.arange(d2.shape[0]), np.arange(lo, lo + d2.shape[0])] = np.inf
+            out[lo : lo + 256] = np.sqrt(d2.min(axis=1))
+        return out
+
+    reach = float(nearest(p, True).max())
+    return bool((nearest(a, False) > reach).any())
 
 
 def spread(y: np.ndarray) -> float:
@@ -178,71 +222,113 @@ def jobs(member: Member, target: str) -> list[Job]:
     ]
 
 
-def reading(member: Member, target: str, changed: str, held_back: np.ndarray, plan: np.ndarray, scenario: np.ndarray, starts: np.ndarray) -> dict:
-    """What can be said about one target of one member. `held_back`,
-    `plan` and `scenario` are the model's medians, per period. The
-    sign, the reason, the history's own estimate of the target under
-    the scenario per period with its interval, how much the input
-    explains, and the error on the held-back periods."""
+def reading(member: Member, target: str, changed: str | list[str], held_back: np.ndarray, plan: np.ndarray, scenario: np.ndarray, starts: np.ndarray) -> dict:
+    """What can be said about one target of one member. `changed` is
+    the input that differs between the plan and the scenario, or the
+    inputs that differ at once. `held_back`, `plan` and `scenario` are
+    the model's medians, per period. The sign, the reason, the
+    history's own estimate of the target under the scenario per period
+    with its interval, what each changed input alone does over the
+    periods ahead with its interval (`parts`, adding up to the joint
+    estimate), how much the changed input explains (the inputs
+    together, where several are changed), and the error on the
+    held-back periods.
+
+    Several inputs are read as the sum of what each does: the slopes
+    of the history's one regression, which holds every input, times
+    each input's change, and the interval from the same draws summed
+    the same way. The sign is stated for that joint change. An input
+    that fails a check (mostly empty, never varied, beyond the
+    history, not told apart) is named in the reason."""
+    changed = [changed] if isinstance(changed, str) else list(changed)
     h, y = len(member.ahead), member.targets[target]
-    past = member.inputs[changed]
-    delta = member.scenario[changed] - member.plan[changed]
-    moved = float(np.nanmean(delta)) if (~np.isnan(delta)).any() else 0.0
+    deltas = {c: member.scenario[c] - member.plan[c] for c in changed}
     shift = float(np.nanmean(scenario - plan))
     out = {
-        "sign": "?", "basis": "", "explains": np.nan,
+        "sign": "?", "basis": "", "explains": np.nan, "parts": [],
         "error": float(np.nanmean(np.abs(held_back - y[-h:]))) if (~np.isnan(y[-h:])).any() else np.nan,
         "history_value": np.full(h, np.nan), "history_low": np.full(h, np.nan), "history_high": np.full(h, np.nan),
     }  # fmt: skip
-    seen = past[~np.isnan(past)]
-    if not (delta[~np.isnan(delta)] != 0).any():
-        return out | {"sign": "0", "basis": "the input is the same as planned and under the scenario for this member"}
+    # An input that is the same as planned for this member is not changed for it; none changed is no change.
+    differs = [c for c in changed if (deltas[c][~np.isnan(deltas[c])] != 0).any()]
+    if not differs:
+        return out | {"sign": "0", "basis": ("the input is" if len(changed) == 1 else "the inputs are") + " the same as planned and under the scenario for this member"}
+    changed = differs
+    one = len(changed) == 1
+    name = (lambda c: "the input") if one else (lambda c: f"the input `{c}`")  # noqa: E731
+    moved = np.array([float(np.nanmean(deltas[c])) if (~np.isnan(deltas[c])).any() else 0.0 for c in changed])
     # An empty cell is unknown, not zero. An input that is mostly empty is not read: the changed one cannot be
     # answered, another one is left out of what is held, and the reason says so. A row with a gap in an input
     # that is read is left out, so an input kept in spite of its gaps costs rows.
     known = ~np.isnan(y)
-    if known.any() and np.isnan(past[known]).mean() > MOSTLY_EMPTY:
-        return out | {"basis": "the input is mostly empty in this member's history"}
-    there = known & ~np.isnan(past)
-    left_out = [c for c, v in member.inputs.items() if c != changed and there.any() and np.isnan(v[there]).mean() > MOSTLY_EMPTY]
+    for c in changed:
+        if known.any() and np.isnan(member.inputs[c][known]).mean() > MOSTLY_EMPTY:
+            return out | {"basis": f"{name(c)} is mostly empty in this member's history"}
+    there = known & ~np.isnan(np.column_stack([member.inputs[c] for c in changed])).any(axis=1)
+    left_out = [c for c, v in member.inputs.items() if c not in changed and there.any() and np.isnan(v[there]).mean() > MOSTLY_EMPTY]
     names = [c for c in member.inputs if c not in left_out]
-    j = names.index(changed)
+    at = [names.index(c) for c in changed]
     note = "; not read, being mostly empty: " + ", ".join(f"`{c}`" for c in left_out) if left_out else ""
 
     def say(basis: str, **more) -> dict:
         return out | more | {"basis": basis + note}
 
-    if len(seen) < 2 or np.std(seen) == 0:
-        return say("the input never varied in this member's history")
-    asked = member.scenario[changed][~np.isnan(member.scenario[changed])]
-    if (asked > seen.max()).any() or (asked < seen.min()).any():
-        # Said apart: the input as planned may already lie where the history never was, before anything is changed.
-        planned = member.plan[changed][~np.isnan(member.plan[changed])]
-        what = "the input as planned" if (planned > seen.max()).any() or (planned < seen.min()).any() else "the change"
-        return say(f"{what} goes beyond what the history holds: the input lay between {seen.min():g} and {seen.max():g}")
-    read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts)
-    slope, on_changes, free = read["slope"][j], read["slope_on_changes"][j], read["free"][j]
-    if not np.isfinite(slope) or not np.isfinite(on_changes):
-        return say("the history is too short to read how the column moved with the input")
-    out["explains"] = float(read["explains"][j])
-    if free < SEPARABLE:
-        return say(f"the input cannot be told apart from {_tied(member, changed, names)}")
+    for c in changed:
+        past = member.inputs[c]
+        seen = past[~np.isnan(past)]
+        if len(seen) < 2 or np.std(seen) == 0:
+            return say(f"{name(c)} never varied in this member's history")
+        asked = member.scenario[c][~np.isnan(member.scenario[c])]
+        if (asked > seen.max()).any() or (asked < seen.min()).any():
+            # Said apart: the input as planned may already lie where the history never was, before anything is changed.
+            planned = member.plan[c][~np.isnan(member.plan[c])]
+            beyond = (planned > seen.max()).any() or (planned < seen.min()).any()
+            what = ("the input as planned" if beyond else "the change") if one else (f"`{c}` as planned" if beyond else f"the change of `{c}`")
+            return say(f"{what} goes beyond what the history holds: the input lay between {seen.min():g} and {seen.max():g}")
+    if not one:
+        # The combination: each input may lie inside its own range while the history never held them together.
+        past = np.column_stack([member.inputs[c] for c in changed])
+        if beyond_together(past, np.column_stack([member.plan[c] for c in changed])):
+            return say("the inputs as planned, together, go beyond what the history holds: no row of the history lies near their combination")
+        if beyond_together(past, np.column_stack([member.scenario[c] for c in changed])):
+            return say("the change goes beyond what the history holds for the inputs together: no row of the history lies near their combination")
+    read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts, together=None if one else at)
+    for c, j in zip(changed, at):
+        if not np.isfinite(read["slope"][j]) or not np.isfinite(read["slope_on_changes"][j]):
+            return say("the history is too short to read how the column moved with the input" + ("" if one else f" `{c}`"))
+    out["explains"] = float(read["explains"][at[0]]) if one else float(read["explains_together"])
+    for c, j in zip(changed, at):
+        if read["free"][j] < SEPARABLE:
+            return say(f"{name(c)} cannot be told apart from {_tied(member, c, names)}")
     ends = [(1 - INTERVAL) / 2, 1 - (1 - INTERVAL) / 2]
-    lo, hi = np.nanquantile(read["draws"][:, j], ends)
-    lo_c, hi_c = np.nanquantile(read["draws_on_changes"][:, j], ends)
-    # The history's estimate per period: the plan's median plus the slope times the change made there.
-    out["history_value"] = plan + slope * delta
-    out["history_low"], out["history_high"] = plan + np.minimum(lo * delta, hi * delta), plan + np.maximum(lo * delta, hi * delta)
-    # The history shows the input moving the column: both readings the same way, neither interval over zero.
+    # The joint change: per draw, the sum over the changed inputs of the draw's slope times the input's change;
+    # as the mean change, for the sign, and per period, for the interval of the history's estimate.
+    change = np.column_stack([deltas[c] for c in changed])  # (periods, inputs)
+    slopes = np.array([read["slope"][j] for j in at])
+    draws, draws_c = read["draws"][:, at], read["draws_on_changes"][:, at]
+    lo, hi = np.nanquantile(draws @ moved, ends)
+    lo_c, hi_c = np.nanquantile(draws_c @ moved, ends)
+    # The history's estimate per period: the plan's median plus what the change made there does, by the slopes.
+    out["history_value"] = plan + change @ slopes
+    per_period = draws @ change.T  # (draws, periods)
+    out["history_low"], out["history_high"] = plan + np.nanquantile(per_period, ends[0], axis=0), plan + np.nanquantile(per_period, ends[1], axis=0)
+    # What each changed input alone does, as the mean over the periods ahead, with its interval from the same draws:
+    # the parts add up to the joint estimate, so a user combines the single-lever and the multi-lever readings.
+    mean_change = np.nanmean(change, axis=0)  # per input
+    out["parts"] = [
+        {"input": c, "history_shift": float(slopes[j] * mean_change[j]), "history_low": float(np.nanquantile(draws[:, j] * mean_change[j], ends[0])), "history_high": float(np.nanquantile(draws[:, j] * mean_change[j], ends[1]))}
+        for j, c in enumerate(changed)
+    ]
+    # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
     if shows:
-        way = np.sign(slope * moved)
+        way = np.sign(slopes @ moved)
         if np.sign(shift) == way and way != 0:
-            return say("the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
+            return say("the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way" if one else "the history shows the inputs together moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
         return say("the model and the history disagree on the direction")
     if abs(shift) < STILL * spread(y):
-        return say("the history shows no effect of the input on the column, and the model moves it by less than a tenth of its spread", sign="0")
-    return say("the history shows no effect of the input on the column, and the model moves it")
+        return say(("the history shows no effect of the input on the column" if one else "the history shows no effect of the inputs together on the column") + ", and the model moves it by less than a tenth of its spread", sign="0")
+    return say(("the history shows no effect of the input on the column" if one else "the history shows no effect of the inputs together on the column") + ", and the model moves it")
 
 
 def _tied(member: Member, changed: str, read: list[str]) -> str:
@@ -270,4 +356,5 @@ def assumptions() -> list[dict]:
         {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
         {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate; a range between two estimates has no stated coverage"},
+        {"field": "basis", "value": "the farthest any history row lies from its nearest neighbour", "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where no history row lies nearer to it than that, each input scaled by its spread in the history"},
     ]

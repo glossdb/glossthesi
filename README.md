@@ -10,7 +10,7 @@ it over HTTP.
 |---|---|---|
 | Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
 | Anomaly detection in a table: errors that break a relation between columns | `/misfit` | TabICL (`tabicl` at a pinned version): the regressor for numeric columns, the classifier for categorical ones |
-| What-if: which way a column moves under a changed input, with the reason, the model's and the history's estimate, and the error on a held-back period (`docs/whatif.md`) | `/whatif` | TabICL's forecaster, as its package ships it, and the series' own history |
+| What-if: which way a column moves under one or several changed inputs, with the reason, the model's and the history's estimate, and the error on a held-back period (`docs/whatif.md`) | `/whatif` | TabICL's forecaster, as its package ships it, and the series' own history |
 
 There is one forecasting set-up. It was chosen on forecasts a quarter
 and a year ahead, on public and enterprise datasets and on a public

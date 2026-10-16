@@ -600,7 +600,7 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     r = client.send("/whatif", WHATIF, _scenario(a=(50.0, 2.0), b=(10.0, 0.0)))
     assert r.status_code == 200, r.text
     answer = r.json()
-    assert answer["answer"]["errors"] == [] and answer["answer"]["changed"] == "x"
+    assert answer["answer"]["errors"] == [] and answer["answer"]["changed"] == ["x"]
     assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low"}
     # Three kinds of rows per member and period, each at the levels asked: held back, as planned, under the scenario.
     assert len(_rows(answer, member="a")) == 3 * 4 * 3
@@ -664,7 +664,7 @@ def test_the_whatif_takes_arrow_with_dates_and_answers_the_same(client):
     assert pa.types.is_date(got.schema.field("period").type)
     assert np.allclose(got.column("value").to_numpy(), np.array(as_json["table"]["value"], dtype=float))
     assert got.column("sign").to_pylist() == as_json["table"]["sign"]
-    assert json.loads(got.schema.metadata[b"answer"])["changed"] == "x"
+    assert json.loads(got.schema.metadata[b"answer"])["changed"] == ["x"]
 
 
 def test_whatif_refusals(client):
@@ -673,11 +673,13 @@ def test_whatif_refusals(client):
     def refused(spec=WHATIF, **changes):
         return client.send("/whatif", spec, dict(table, **changes))
 
-    # One input is changed per request: none or several are refused, with the fields named.
+    # Nothing changed is refused; several inputs changed at once are read together.
     same = refused(x=[0.0 if status == "scenario" else x for status, x in zip(table["status"], table["x"])])
     assert same.status_code == 422 and "nothing is changed" in same.json()["error"]
-    both = refused(z=[9.0 if status == "scenario" else z for status, z in zip(table["status"], table["z"])])
-    assert both.status_code == 422 and {e["field"] for e in both.json()["errors"]} == {"x", "z"}
+    both = refused(z=[0.9 if status == "scenario" else z for status, z in zip(table["status"], table["z"])])
+    assert both.status_code == 200 and both.json()["answer"]["changed"] == ["x", "z"]
+    said = _rows(both.json(), status="scenario", level=0.5)[0]
+    assert said["sign"] == "+" and "the inputs together" in said["basis"]
     # The calendar is read from the period.
     assert refused(period=list(range(len(table["period"])))).status_code == 400
     # The periods ahead come twice, the same periods in both.

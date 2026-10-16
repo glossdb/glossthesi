@@ -93,3 +93,47 @@ def test_an_input_that_is_mostly_empty_is_not_read_and_the_reason_says_so():
     # The input asked about is itself mostly empty: no answer.
     got = read({"x": x, "markdown": mostly_empty}, "markdown")
     assert got["sign"] == "?" and got["basis"] == "the input is mostly empty in this member's history"
+
+
+def test_several_inputs_changed_at_once_are_read_as_the_sum_of_what_each_does():
+    stamps, y, x, z = _weekly()
+    starts = whatif.places(np.random.default_rng(1))
+    m = _member(stamps, y, {"x": x, "z": z}, "x")
+    m.scenario["z"] = np.minimum(m.plan["z"] + 0.1, np.nanmax(z[: len(m.stamps)]))
+    plan = np.full(13, 50.0)
+    alone = {c: whatif.reading(m, "y", c, plan, plan, plan + 1.0, starts) for c in ("x", "z")}
+    both = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 1.0, starts)
+    # The history's estimate of the joint change is the sum of the two single estimates, to the digit.
+    assert np.allclose(both["history_value"] - plan, (alone["x"]["history_value"] - plan) + (alone["z"]["history_value"] - plan))
+    assert both["sign"] in "+-0?" and "the inputs together" in both["basis"] or both["basis"].startswith("the model and the history disagree")
+    # One input changed answers as before, to the digit, through the same code.
+    one = whatif.reading(m, "y", ["x"], plan, plan, plan + 1.0, starts)
+    for key in ("sign", "basis", "explains"):
+        assert one[key] == alone["x"][key]
+    assert np.allclose(one["history_low"], alone["x"]["history_low"]) and np.allclose(one["history_high"], alone["x"]["history_high"])
+
+
+def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up():
+    rng = np.random.default_rng(3)
+    promo, holiday = (rng.uniform(size=200) < 0.4).astype(float), (rng.uniform(size=200) < 0.3).astype(float)
+    never_together = np.column_stack([promo, np.where(promo == 1, 0.0, holiday)])
+    # Each input inside its own range, the pair never on together: beyond. On together before: inside.
+    assert whatif.beyond_together(never_together, np.array([[1.0, 1.0]]))
+    assert not whatif.beyond_together(never_together, np.array([[1.0, 0.0], [0.0, 1.0]]))
+    assert not whatif.beyond_together(np.column_stack([promo, holiday]), np.array([[1.0, 1.0]]))
+    # A continuous pair: a corner the history never visited is beyond, a point among the rows is not.
+    cloud = rng.normal(size=(300, 2))
+    assert whatif.beyond_together(cloud, np.array([[6.0, 6.0]])) and not whatif.beyond_together(cloud, np.array([[0.3, -0.2]]))
+    # The parts of a joint reading add up to its estimate and equal the single readings.
+    stamps, y, x, z = _weekly()
+    starts = whatif.places(np.random.default_rng(1))
+    m = _member(stamps, y, {"x": x, "z": z}, "x")
+    m.scenario["z"] = np.minimum(m.plan["z"] + 0.1, np.nanmax(z[: len(m.stamps)]))
+    plan = np.full(13, 50.0)
+    both = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 1.0, starts)
+    assert [part["input"] for part in both["parts"]] == ["x", "z"]
+    assert np.isclose(sum(part["history_shift"] for part in both["parts"]), np.mean(both["history_value"] - plan))
+    for c in ("x", "z"):
+        alone = whatif.reading(m, "y", c, plan, plan, plan + 1.0, starts)
+        assert np.isclose(alone["parts"][0]["history_shift"], next(part["history_shift"] for part in both["parts"] if part["input"] == c))
+

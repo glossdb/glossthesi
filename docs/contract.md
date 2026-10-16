@@ -202,9 +202,13 @@ asked about, it gets `?`; otherwise it is left out of what the
 history's reading holds, and `basis` names it. A row with a gap in an
 input that is read is left out of that reading.
 
-One input differs between `plan` and `scenario`. A request where
-several differ is refused with their names: changing several at
-once was not tested.
+One input or several differ between `plan` and `scenario`; a
+request where none differs is refused. Several inputs changed at once
+are read together (built 2026-10-16): the history's estimate is the
+sum of what each does, from the one regression that holds every
+input, with its interval from the same draws; an interaction between
+two inputs is not something the history reads, so a model that read
+one would show as a disagreement.
 
 **The specification.**
 
@@ -213,8 +217,25 @@ once was not tested.
 | `targets` | Every column the caller wants an answer for. Each is answered from its own history, also one that is defined from others (revenue from price and units): nothing is carried from one column to another, so no definition has to cross the wire and none is recomputed by the caller. Every other value column is an input known ahead. | required |
 | `levels` | The quantile levels asked for, each strictly between 0 and 1. | required |
 
-**The answer object** carries `changed`, the input that differs,
-beside `errors` and `assumptions`.
+**The answer object** carries `changed`, the inputs that differ, as
+a list in the table's order, and `parts`, beside `errors` and
+`assumptions`: per member, column and changed input, what that input
+alone does to the column over the periods ahead by the member's
+history (`history_shift`, the mean over the periods, with
+`history_low` and `history_high`, its 90% interval), from the same
+regression as the joint estimate, so that the parts add up to it. A
+user reads the single levers and the pair in one picture: which
+lever carries the effect, and when two cancel.
+
+Several changed inputs are also checked together: each may lie
+inside its own range while the history never held the combination.
+Where no row of the history lies near the scenario's combination of
+the changed inputs, nearer than the loneliest history row lies from
+its own nearest neighbour in that space with each input scaled by
+its spread, the route states no sign and `basis` says whether the
+inputs as planned or the change go beyond together. For switch
+inputs that is whether the two have been on together before. The
+reach is the history's own and is declared in `assumptions`.
 
 **The answer table.** One row per member, column, status, period
 and level.
@@ -231,10 +252,10 @@ And per member and column, the same on each of its rows:
 
 | Column | Meaning |
 |---|---|
-| `sign` | `+` or `-`: the history shows the input moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of the column's spread. `?`: nothing can be said; `basis` says why. |
+| `sign` | `+` or `-`: the history shows the input, or the inputs together, moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of the column's spread. `?`: nothing can be said; `basis` says why, naming the input where one of several fails a check. |
 | `confidence` | The sign in words: `direction`, `no effect visible`, `not answerable`. |
 | `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing and the model moves the column. |
-| `explains` | The share of the column the input explains in this member's history, the other inputs and the calendar held. |
+| `explains` | The share of the column the changed input explains in this member's history, the other inputs and the calendar held; the inputs together, where several are changed. |
 | `error` | The mean distance of the held-back median from what was recorded, in the column's own units. |
 
 `no effect visible` means that this member's data does not show
