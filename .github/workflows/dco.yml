@@ -1,0 +1,28 @@
+# Every commit of a pull request carries a `Signed-off-by` line, the contributor's certificate of origin
+# (`DCO`, `CONTRIBUTING.md`); a commit without one fails the check. The repository's owner is not asked,
+# the project being theirs.
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every commit carries a Signed-off-by line
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits" --paginate \
+            --jq '.[] | select((.author.login // "") != "${{ github.repository_owner }}") | select((.commit.message | test("(^|\n)Signed-off-by: .+ <.+@.+>"; "")) | not) | "\(.sha[0:9])  \(.commit.message | split("\n")[0])"' > missing.txt
+          if [ -s missing.txt ]; then
+            echo "commits without a Signed-off-by line (git commit -s adds it; see CONTRIBUTING.md):"
+            cat missing.txt
+            exit 1
+          fi
+          echo "every commit is signed off, or the owner's"

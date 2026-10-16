@@ -19,17 +19,21 @@ Keep to the conventions you find: plain words in the docs and the
 commit messages, a reason beside every constant, and nothing in the
 service that names a dataset, a customer or a provider.
 
-## The contributor licence agreement
+## The sign-off
 
-Every contributor signs the agreement in `CLA.md` once. A bot asks on
-your first pull request; you sign by commenting the sentence it
-names, and the signature is recorded in the repository on the branch
-`cla-signatures`. If you contribute for an employer or another
-entity, someone authorised to sign for it does so. Pull requests from
-contributors who have not signed are not merged.
+Every commit in a pull request carries a line
+
+    Signed-off-by: Your Name <you@example.org>
+
+which `git commit -s` adds. It certifies the Developer Certificate of
+Origin in `DCO`: that you wrote the change or have the right to submit
+it under the project's licence, under your real name. A workflow
+checks the line on every pull request; a commit without it is not
+merged. There is no contributor licence agreement to sign; your
+contribution is received under the project's licence, and you keep
+your copyright.
 
 ## Licence
 
 The project is under the GNU Affero General Public License, version 3
-or any later version (`LICENSE`). Your contribution is received under
-it and under the terms of `CLA.md`.
+or any later version (`LICENSE`).

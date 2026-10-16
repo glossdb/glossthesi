@@ -189,14 +189,15 @@ uv run pytest                          # the wire in both encodings, the owner, 
 
 ## License
 
-GNU Affero General Public License, version 3 or any later version
-(`LICENSE`). The service may be used, changed and run freely; whoever
-changes it and runs it for others over a network has to offer them
-the changed source (the licence's section 13). glossql is a separate
-program that talks to the service over HTTP. The checkpoints the image
-bakes carry licences of their own: Chronos-2 under Apache-2.0, TabICL
-under BSD-3-Clause with its forecasting part under Apache-2.0.
+Copyright © 2026 Philipp Suter. GNU Affero General Public License,
+version 3 or any later version (`LICENSE`). The service may be used,
+changed and run freely; whoever changes it and runs it for others
+over a network has to offer them the changed source (the licence's
+section 13). glossql is a separate program that talks to the service
+over HTTP. The checkpoints the image bakes carry licences of their
+own: Chronos-2 under Apache-2.0, TabICL under BSD-3-Clause with its
+forecasting part under Apache-2.0.
 
-Contributions are welcome under the contributor licence agreement in
-`CLA.md`, signed once on a first pull request; `CONTRIBUTING.md` says
-how.
+Contributions are welcome; each commit certifies the Developer
+Certificate of Origin (`DCO`) with a `Signed-off-by` line, and
+`CONTRIBUTING.md` says how.
