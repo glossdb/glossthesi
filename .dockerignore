@@ -4,4 +4,5 @@
 !pyproject.toml
 !uv.lock
 !src
+!LICENSE
 src/**/__pycache__

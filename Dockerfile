@@ -38,6 +38,8 @@ FROM python:3.13-slim
 RUN useradd --system --uid 10001 --create-home --home-dir /app kernel
 COPY --from=build --chown=kernel:kernel /app/.venv /app/.venv
 COPY --from=build --chown=kernel:kernel /app/hf /app/hf
+# The licence travels with the program (AGPL-3.0-or-later); the checkpoints carry their own.
+COPY --chown=kernel:kernel LICENSE /app/LICENSE
 USER kernel
 WORKDIR /app
 # The build's name, reported by /healthz and every log line.
