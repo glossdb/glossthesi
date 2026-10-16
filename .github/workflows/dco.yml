@@ -1,6 +1,6 @@
 # Every commit of a pull request carries a `Signed-off-by` line, the contributor's certificate of origin
-# (`DCO`, `CONTRIBUTING.md`); a commit without one fails the check. The repository's owner is not asked,
-# the project being theirs.
+# (`DCO`, `CONTRIBUTING.md`); a commit without one fails the check. The maintainers listed below are not
+# asked, the project being theirs; the repository's owner is an organisation, so a login is named.
 name: DCO
 
 on:
@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
   pull-requests: read
+
+env:
+  MAINTAINERS: phas02
 
 jobs:
   sign-off:
@@ -19,10 +22,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits" --paginate \
-            --jq '.[] | select((.author.login // "") != "${{ github.repository_owner }}") | select((.commit.message | test("(^|\n)Signed-off-by: .+ <.+@.+>"; "")) | not) | "\(.sha[0:9])  \(.commit.message | split("\n")[0])"' > missing.txt
+            --jq --arg maintainers "$MAINTAINERS" '.[] | select((.author.login // "") as $who | ($maintainers | split(",") | map(. == $who) | any) | not) | select((.commit.message | test("(^|\n)Signed-off-by: .+ <.+@.+>"; "")) | not) | "\(.sha[0:9])  \(.commit.message | split("\n")[0])"' > missing.txt
           if [ -s missing.txt ]; then
             echo "commits without a Signed-off-by line (git commit -s adds it; see CONTRIBUTING.md):"
             cat missing.txt
             exit 1
           fi
-          echo "every commit is signed off, or the owner's"
+          echo "every commit is signed off, or a maintainer's"

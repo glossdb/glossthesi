@@ -29,7 +29,7 @@ which `git commit -s` adds. It certifies the Developer Certificate of
 Origin in `DCO`: that you wrote the change or have the right to submit
 it under the project's licence, under your real name. A workflow
 checks the line on every pull request; a commit without it is not
-merged. There is no contributor licence agreement to sign; your
+merged. The maintainers named in that workflow are not asked. There is no contributor licence agreement to sign; your
 contribution is received under the project's licence, and you keep
 your copyright.
 
