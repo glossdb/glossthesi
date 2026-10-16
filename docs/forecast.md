@@ -136,6 +136,7 @@ the baseline.
 | Widening the intervals from the request's own history (GK-33) | What the intervals missed in the year before does not predict what they miss after. Only ever widening: coverage up 0.02 at 1 to 4% more loss and three forecasts per request |
 | A width learned from a dataset's record of forecasts and actual values (GK-35) | Moves the coverage the right way on most datasets and costs 5 to 15% loss on records of one to two years. Not served as a default; the `width` field stays for a caller with a longer record |
 | A dependence that decays with the distance between periods (GK-34) | No single value serves both grains and both spans |
+| Timestral-209M or t0-gamma in place of Chronos-2 (2026-10-16, read through the service's own contract on the development datasets) | Timestral 1 to 6% lower loss for the next period and the quarter, level to 3% higher a year ahead and 5 to 10% higher on the totals of a year, intervals over-covering at 0.82 to 0.86; t0-gamma behind at planning distances. The vendors' first places rest on hourly data: 2 to 4% over Chronos-2 at the business grains on the leaderboard's own files. GK-49, GK-52 and GK-54 in the evaluation's findings; the adapters live in the branch's history |
 
 ## What a caller should know
 
@@ -184,6 +185,11 @@ the baseline.
 - TabPFN-TS (Hoo et al., 2025, arXiv:2501.02945): forecasting with a
   tabular model, the approach measured against Chronos-2 and removed.
 - Kuleshov et al., 2018: the recalibration that was tried.
+- Timestral (Mistral AI, 2026-10-15): the model card and the package
+  (github.com/mistralai/timestral); its technical report had not
+  appeared. t0 (The Forecasting Company, arXiv:2609.24559): the model
+  card and the package (`tfc-t0`). Both read as candidates and
+  dropped (GK-49).
 
 ## A rule kept from the tests
 

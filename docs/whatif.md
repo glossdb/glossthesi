@@ -153,72 +153,74 @@ A table of one series or a few is cut at several dates, one horizon
 apart; those answers share most of their history and count for less
 than their number.
 
-## What a caller should know about its table
+## Candidates behind the three predictions
 
-Findings, not tested rules.
+On 2026-10-16 two forecasting models, Timestral-209M and t0-gamma,
+were put behind the what-if's three predictions in place of TabICL's
+forecaster, with the history's reading unchanged, on the seven
+development tables of the run above (GK-53 in the evaluation's
+findings). Neither reached it: the model moved the column the
+history's way on 84% and 91% where TabICL's does on 93%, and stayed
+still where the history shows nothing on 82% and 75% against 90%; the
+size ran at 0.88 and 0.77 of the history's against 0.99. Both took a
+tenth of its time. A member's targets forecast together, which both
+can and TabICL's forecaster cannot, changed nothing (GK-55). TabICL
+stays; the adapters live in the repository's history.
 
-- **Grain:** fine enough that the input changes from row to row. One
-  table's promotions showed nothing on weeks or months and were
-  readable on days.
-- **Window:** more rows help. The shortest histories that worked were
-  52 weeks, 365 days, 672 hours. A member needs 26 periods more than
-  there are ahead; at most 4,096 are read.
-- **The input must have varied in each member's own history.**
-- **Inputs that determine one another cannot be told apart,** nor can
-  an input that follows the calendar (a load forecast by the hour, a
-  temperature within one year).
-- **An empty cell is unknown, not zero.** Where empty means something
-  (no markdown that week), fill it before sending. An input empty in
-  more than half of a member's history is not read, and the reason
-  names it; a row with a gap in an input that is read is left out.
-- **A member that has barely started** is predicted badly.
-- **The change stays inside what the history has seen,** and so does
-  the input as planned. An input that grows past its own history, as
-  the orders of a growing business do, is not answered.
-- **An input that works in both directions** (temperature on load) is
-  read by one straight line. Around the turn of a season the route
-  states no sign.
+## Several inputs changed at once
 
-Four assumptions under which a predicted effect of a set input can
-be read as its effect; they hold for any method, and only the first
-can be seen in the table:
+Built on 2026-10-16, after the forecast route had been read on it
+(GK-50). A request may change several inputs between the plan and
+the scenario. The model predicts the scenario rows as they are; the
+history's estimate is the sum of what each changed input does, from
+the one regression that holds every input, with its interval from the
+same resampled draws summed the same way, and the sign is stated for
+the joint change. An input that fails a check (mostly empty, never
+varied, beyond the history, not told apart) is named in the reason.
+What the history cannot read is an interaction, a promotion working
+differently at a lower price: its straight line adds the two
+effects, so a model that read an interaction would disagree with it
+and the route would state no sign.
 
-| Assumption | In plain words |
-|---|---|
-| Positivity | The change asked has happened before, on members with a comparable history |
-| Exchangeability | Nothing unrecorded decided both when the input was set and how the column went |
-| A well-defined lever | The recorded input is something someone sets. A promotion is; a wind forecast is not |
-| No interference | Setting the input for one member does not move another |
+Two things make the multi-lever answer as safe to read as the
+single one (on Philipp's word, the same day). The answer object
+carries `parts`: per member, column and changed input, what that
+lever alone does over the periods ahead with its interval, from the
+same regression, so the parts add up to the joint estimate and a
+user sees which lever carries the effect and when two cancel. And
+several changed inputs are checked together: each may lie inside its
+own range while the history never held the combination (a promotion
+and a holiday that never fell together); where no row of the history
+lies near the scenario's combination, nearer than the loneliest
+history row lies from its own nearest neighbour in that space, the
+route states no sign and says whether the plan or the change goes
+beyond together. The reach is the history's own, with no number to
+choose; it is declared as an assumption on every answer. On the three
+tables the check fires on 5 of 80 series and columns: the German
+market's two forecasts as planned on 4, a change on the hourly load
+on 1, none on Rossmann, where promotion and holiday have fallen
+together; the parts equal the single-lever readings to the digit,
+and the direction holds on all 64 where the history shows the joint
+effect.
 
-A trial (an A/B test) makes the first two true by design. The
-service cannot run one, but a table that holds a past trial is the
-kind of history from which a size can be read.
-
-## What the calling actor may do with the answer
-
-Guidance for a skill, not code in the caller.
-
-- **The bracket:** for a period under the scenario, the range between
-  the model's median and the history's interval. It has no stated
-  coverage.
-- **Through a definition the actor knows** (revenue = price × units):
-  recompute at the model's value and at both ends of the history's
-  interval. Where every end lies on the same side of the plan, the
-  direction of the defined number is certain; otherwise it is
-  ambiguous. Signs multiply along a chain of links and add where
-  chains meet; a plus and a minus add to "ambiguous". Only forwards
-  from the changed input.
-- **Break-even:** how large the shift must be for a plan to pay off
-  is arithmetic over the definitions. Outside the bracket the
-  decision holds whatever the size; inside it, the size decides and
-  the what-if cannot.
-- **A total** is asked for by sending the summed series as a member.
+Tested the same day on the three development tables with two inputs
+named (80 series and columns; GK-50 in the evaluation's findings):
+where the history's joint estimate is off zero on both readings (65),
+the model moves the column that way on 98%, its shift 1.06 of the
+history's estimate at the median and within half to one and a half
+times on 89%; Rossmann's promotion with school holiday 1.06 on sales
+and 1.04 on customers with the direction on every store. Where the
+history shows nothing of the pair (15, the energy tables) the model
+moves anyway, as it does there with one input. The German market's
+two forecasts show an effect each and none together, their estimates
+pulling apart, and the route states no sign: the right answer to a
+pair that cancels.
 
 ## Not covered
 
-Several inputs changed at once; a change beyond what the history
-holds; one member's input moving another member; columns tied by a
-definition being made to agree with it.
+A change beyond what the history holds; one member's input moving
+another member; columns tied by a definition being made to agree
+with it; an interaction between two changed inputs.
 
 ## What could come next
 

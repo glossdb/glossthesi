@@ -496,7 +496,7 @@ class _WhatifPlan:
     table: pa.Table
     targets: list[str]
     levels: list[float]
-    changed: str
+    changed: list[str]  # the inputs that differ between the plan and the scenario, in the table's order
     members: list[whatif.Member]
     rows: list[tuple[np.ndarray, np.ndarray, np.ndarray]]  # per member, the table's rows of its held-back periods, its plan and its scenario
     errors: list[dict] = field(default_factory=list)
@@ -535,11 +535,12 @@ class Whatif:
 
     The table's actual rows are a member's history. The periods ahead
     come twice: as planned (`plan`) and under the change (`scenario`),
-    the same periods in both, one input differing. Every target is
-    answered on its own: the model's quantiles for the last periods of
-    the history held back, for the plan and for the scenario; the
-    history's own estimate of the scenario with its interval; the
-    sign, where the history and the model agree, with the reason."""
+    the same periods in both, one input or several differing. Every
+    target is answered on its own: the model's quantiles for the last
+    periods of the history held back, for the plan and for the
+    scenario; the history's own estimate of the scenario with its
+    interval, the sum of what each changed input does; the sign, where
+    the history and the model agree, with the reason."""
 
     @staticmethod
     def parse(table: pa.Table, spec: dict[str, Any]) -> _WhatifPlan:
@@ -597,12 +598,7 @@ class Whatif:
         moved = [c for c in inputs if differs(c)]
         if members and not moved:
             raise Refusal("the `plan` and `scenario` rows hold the same inputs: nothing is changed", 422, [{"field": "status", "error": "no input differs between `plan` and `scenario`"}])
-        if len(moved) > 1:
-            raise Refusal(
-                f"{len(moved)} inputs differ between `plan` and `scenario` ({', '.join(moved)}): one is changed per request, since changing several at once was not tested",
-                422, [{"field": c, "error": "differs between `plan` and `scenario`"} for c in moved],
-            )  # fmt: skip
-        return _WhatifPlan(table, targets, levels, moved[0] if moved else "", members, rows, errors)
+        return _WhatifPlan(table, targets, levels, moved, members, rows, errors)
 
     @staticmethod
     async def serve(own: Owner, caller: str, plan: _WhatifPlan) -> tuple[pa.Table, dict]:
@@ -633,8 +629,10 @@ class Whatif:
         periods = plan.table.column("period")
         names = ("member", "period", "column", "status", "level", "value", "actual", "history_value", "history_low", "history_high", "sign", "confidence", "basis", "explains", "error")
         cols: dict[str, list] = {name: [] for name in names}
+        parts: list[dict] = []  # per member, column and changed input: what that input alone does, by the history
         for i, t, three, said in await run_in_threadpool(read):
             member = plan.members[i]
+            parts += [{"member": member.name, "column": t} | part for part in said["parts"]]
             h, m = len(member.ahead), len(asked)
             recorded = member.targets[t][-h:]
             nothing = np.full(h, np.nan)
@@ -661,7 +659,7 @@ class Whatif:
         )
         for e in errors:
             telemetry.refused(422, caller, "/whatif", e["error"])
-        return table, {"errors": errors, "changed": plan.changed, "assumptions": whatif.assumptions()}
+        return table, {"errors": errors, "changed": plan.changed, "parts": parts, "assumptions": whatif.assumptions()}
 
 
 async def healthz(_: Request) -> Response:
