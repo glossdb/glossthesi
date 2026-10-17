@@ -17,8 +17,9 @@ dependencies = [
     "uvicorn>=0.52",
     # The checkpoints come from the hub cache; baked into the image at build.
     "huggingface-hub>=0.30",
-    # The forecasting model (Chronos-2, Apache-2.0); its weights are baked beside the regressor's.
-    "chronos-forecasting>=2",
+    # The forecasting model (Chronos-2, Apache-2.0); its weights are baked beside the regressor's. Pinned, as the
+    # checkpoint's revision is (`forecast.REVISION`): every measured number describes this package and those weights.
+    "chronos-forecasting==2.3.2",
     # The wire: Arrow IPC streams in and out, and the JSON encoding built through the same tables.
     "pyarrow>=17",
 ]

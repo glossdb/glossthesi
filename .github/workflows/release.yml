@@ -3,7 +3,10 @@
 # deployment pins a commit between releases. Same shape as glossql's
 # release: ghcr.io/glossdb/glossthesi:<version> plus :latest at a tag,
 # :<branch> and :sha-<commit> from a dispatch; :latest moves at a tag only.
-# This is not CI (tests.yml is): nothing here runs on push.
+# This is not CI (tests.yml is): nothing here runs on push. The tests
+# run first all the same, so no image is built from a commit that fails
+# them; and the started image answers a forecast and a what-if, not only
+# /healthz, so an image whose routes are broken is not pushed.
 #
 # The image is public on GHCR, so Cloud Run pulls it directly — no
 # Artifact Registry, no project name here. The version is `version` in
@@ -27,7 +30,25 @@ permissions:
   packages: write
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('src/glossthesi/kernels.py', 'src/glossthesi/forecast.py') }}
+      - run: uv sync --frozen --all-extras
+      - run: uv run pytest -q
+        env:
+          GLOSSTHESI_DEVICE: cpu
+          HF_HUB_DISABLE_TELEMETRY: "1"
   image:
+    needs: tests
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -92,6 +113,29 @@ jobs:
           echo "$health"
           [ "$(echo "$health" | jq -r .loaded)" = true ] || { echo "not loaded"; exit 1; }
           [ "$(echo "$health" | jq -r .version)" = "$VERSION" ] || { echo "version is not $VERSION"; exit 1; }
+          # One forecast and one what-if through the doors, in the JSON encoding: the routes answer, nothing fails alone.
+          python3 - <<'PY'
+          import datetime, json
+          months = [f"2025-{m:02d}" for m in range(1, 9)]
+          forecast = {"spec": {"targets": ["sales"], "horizon": 2, "levels": [0.1, 0.5, 0.9]},
+                      "table": {"member": ["a"] * 8, "period": months, "status": ["actual"] * 6 + ["forecast"] * 2,
+                                "sales": [120, 132, 128, 141, 150, 148, None, None]}}
+          weeks = [str(datetime.date(2024, 1, 1) + datetime.timedelta(weeks=i)) for i in range(32)]
+          history, ahead = weeks[:30], weeks[30:]
+          sales = [100 + (i % 4) + 10 * (i % 3 == 0) for i in range(30)]
+          promo = [1.0 if i % 3 == 0 else 0.0 for i in range(30)]
+          whatif = {"spec": {"targets": ["sales"], "levels": [0.1, 0.5, 0.9]},
+                    "table": {"member": ["a"] * 34, "period": history + ahead + ahead,
+                              "status": ["actual"] * 30 + ["plan"] * 2 + ["scenario"] * 2,
+                              "sales": sales + [None] * 4, "promo": promo + [0.0, 0.0] + [1.0, 1.0]}}
+          json.dump({"forecast": forecast, "whatif": whatif}, open("bodies.json", "w"))
+          PY
+          for route in forecast whatif; do
+            jq ".$route" bodies.json > body.json
+            code=$(curl -s -o answer.json -w '%{http_code}' -H 'authorization: Bearer smoke' -H 'content-type: application/json' --data @body.json "http://127.0.0.1:8100/$route")
+            [ "$code" = 200 ] || { echo "/$route answered $code"; cat answer.json; exit 1; }
+            [ "$(jq '.answer.errors | length' answer.json)" = 0 ] || { echo "/$route failed an item"; jq .answer.errors answer.json; exit 1; }
+          done
           docker rm -f kernel
       - if: steps.built.outputs.found != 'true'
         run: docker image push --all-tags "$IMAGE"

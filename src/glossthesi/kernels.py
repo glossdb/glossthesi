@@ -33,6 +33,8 @@ from . import forecast
 HUB_REPO = "jingang/TabICL"
 REGRESSOR = "tabicl-regressor-v2-20260212.ckpt"
 CLASSIFIER = "tabicl-classifier-v2-20260212.ckpt"
+# What the service serves, by checkpoint, on /healthz: the TabICL files are dated in their names, Chronos-2 by its commit.
+CHECKPOINTS = {HUB_REPO: [REGRESSOR, CLASSIFIER], forecast.MODEL: forecast.REVISION}
 
 
 class KernelError(Exception):
@@ -155,12 +157,16 @@ class Kernels:
         everyone = list(range(len(jobs)))
         try:
             done: dict[int, np.ndarray | Exception] = dict(read(everyone))
-        except Exception:  # one series the pipeline refuses fails the lot: read them one by one, so that it fails alone
+        except Exception as e:  # one series the pipeline refuses fails the lot: read them one by one, so that it fails alone
+            if forecast.out_of_memory(e):
+                raise  # the device's memory, not a series: the owner's failure
             done = {}
             for i in everyone:
                 try:
                     done.update(read([i]))
                 except Exception as e:  # noqa: BLE001 — reported per job
+                    if forecast.out_of_memory(e):
+                        raise
                     done[i] = e
         return [done[i] for i in everyone]
 

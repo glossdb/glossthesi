@@ -19,7 +19,8 @@
 # pulled into a hub cache. Nothing of this stage but those two trees
 # reaches the image — not uv, not its cache, not the source.
 FROM python:3.13-slim AS build
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# uv by version, so two builds of one commit resolve the lock the same way.
+COPY --from=ghcr.io/astral-sh/uv:0.12.17 /uv /usr/local/bin/uv
 WORKDIR /app
 # No cache: it would be a second copy of every unpacked wheel. The
 # project installed as a wheel, not editable — the source stays here.

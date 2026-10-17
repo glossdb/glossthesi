@@ -92,3 +92,14 @@ def test_a_failed_job_fails_its_own_caller_recovers_the_device_and_leaves_the_ra
     assert kernel.recovered == 1 and own.stats["failed"] == 1 and own._rate == 0.0
     assert own.exclusive("a", "forecast", 10, lambda _k: "fine").result(5) == "fine"
     assert own.stats["cycles"] == 2 and own._rate > 0
+
+
+def test_a_job_cancelled_while_it_waited_is_neither_run_nor_counted():
+    kernel = Gated()
+    own = held(kernel)
+    waiting = own.exclusive("a", "forecast", 10, job(1.0))
+    assert waiting.cancel()
+    after = own.exclusive("a", "forecast", 10, job(2.0))
+    kernel.gate.set()
+    assert after.result(5) == 2.0 and kernel.served == [2.0]
+    assert own.stats["failed"] == 0 and own.stats["jobs"] == 2  # the warm job and the one that ran

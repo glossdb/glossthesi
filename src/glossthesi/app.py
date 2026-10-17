@@ -19,7 +19,8 @@ the request counts against:
   authentication; the service checks it again, so one left open by
   mistake still refuses. The caller is the account's email.
 - `GLOSSTHESI_KEYS`: shared bearer keys, comma-separated (a laptop, a
-  test host). The caller is the key.
+  test host). The caller is the key's place in the list (`key-1`),
+  never the key itself: the caller's name goes to the logs.
 - neither: every request is refused, and the service does not start.
 - `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossql.
   The doors serve without authentication and every caller is recorded
@@ -30,6 +31,7 @@ the request counts against:
 from __future__ import annotations
 
 import asyncio
+import hmac
 import math
 import os
 import threading
@@ -57,7 +59,8 @@ VERSION = os.environ.get("GLOSSTHESI_VERSION", "") or "dev"
 _OWNER: Owner | None = None
 _OWNER_LOCK = threading.Lock()
 
-# A body is parsed before the queue can refuse it, so it is bounded first.
+# A body is parsed before the queue can refuse it, so it is bounded first: the bytes as they arrive, and what an
+# Arrow stream decodes to, batch by batch — a compressed stream may be many times its wire size (wire.parse).
 MAX_BODY_MB = int(os.environ.get("GLOSSTHESI_MAX_BODY_MB", "") or 32)
 
 # Set when the host has asked the process to stop: what is in flight is
@@ -79,6 +82,11 @@ def _names(variable: str) -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
+def _keys() -> list[str]:
+    """The bearer keys in the order set: a key is named by its place."""
+    return [k.strip() for k in os.environ.get("GLOSSTHESI_KEYS", "").split(",") if k.strip()]
+
+
 INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossql's name for it
 UNARRANGED = (
     "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
@@ -96,8 +104,8 @@ def arrangement() -> str | None:
     if insecure_open():
         return "insecure-open"
     if os.environ.get("GLOSSTHESI_AUDIENCE", "").strip():
-        return "id-token"
-    return "keys" if _names("GLOSSTHESI_KEYS") else None
+        return "id-token" if _names("GLOSSTHESI_CALLERS") else None  # an audience nobody is allowed for is nothing arranged
+    return "keys" if _keys() else None
 
 
 # Verified ID tokens, kept until they expire: Google's certificates are
@@ -149,21 +157,33 @@ def _caller(request: Request) -> str | None:
     audience = os.environ.get("GLOSSTHESI_AUDIENCE", "").strip()
     if audience:
         callers = _names("GLOSSTHESI_CALLERS")
-        if not token:
+        if not token or not callers:
             return None
         email = _account(token, audience)
         return email if email is not None and email in callers else None
-    return token if token and token in _names("GLOSSTHESI_KEYS") else None
+    if not token:
+        return None
+    # A key is never the caller's name — the name goes to the logs — and every key is compared, in constant time.
+    found = None
+    for i, key in enumerate(_keys(), start=1):
+        if hmac.compare_digest(token.encode(), key.encode()):
+            found = f"key-{i}"
+    return found
 
 
 async def _body(request: Request) -> bytes:
+    """The body, refused with a 413 once it passes the cap: as declared, or as it arrives where nothing is declared."""
+    cap = MAX_BODY_MB * 1024 * 1024
     declared = request.headers.get("content-length", "")
-    if declared.isdigit() and int(declared) > MAX_BODY_MB * 1024 * 1024:
+    if declared.isdigit() and int(declared) > cap:
         raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413)
-    raw = await request.body()
-    if len(raw) > MAX_BODY_MB * 1024 * 1024:
-        raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413)
-    return raw
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > cap:
+            raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _door(read):
@@ -182,7 +202,7 @@ def _door(read):
             return JSONResponse({"error": said}, status_code=401)
         try:
             raw = await _body(request)
-            parsed = await run_in_threadpool(wire.parse, request.headers.get("content-type", ""), raw)
+            parsed = await run_in_threadpool(wire.parse, request.headers.get("content-type", ""), raw, MAX_BODY_MB * 1024 * 1024)
             plan = await run_in_threadpool(read.parse, parsed.table, parsed.spec)
             table, answer = await read.serve(owner(), caller, plan)
             body, media = await run_in_threadpool(wire.encode, table, {"service": SERVICE, "version": VERSION} | answer, parsed.encoding)
@@ -411,7 +431,7 @@ class Forecast:
             }
         )
         for e in errors:
-            telemetry.refused(422, caller, "/forecast", e["error"])
+            telemetry.item_failed(caller, "/forecast", e["error"])
         answer: dict[str, Any] = {"errors": errors, "coverage": coverage.held(plan.grain, plan.horizon, plan.spans, plan.levels)}
         if plan.spans:
             answer["assumptions"] = [forecast.dependence(plan.grain)]
@@ -658,7 +678,7 @@ class Whatif:
             {name: wire.taken(periods, cols[name]) if name == "period" else pa.array(cols[name], type=pa.string()) if name in text else pa.array(np.asarray(cols[name], dtype=np.float64), from_pandas=True) for name in names}
         )
         for e in errors:
-            telemetry.refused(422, caller, "/whatif", e["error"])
+            telemetry.item_failed(caller, "/whatif", e["error"])
         return table, {"errors": errors, "changed": plan.changed, "parts": parts, "assumptions": whatif.assumptions()}
 
 
@@ -674,6 +694,7 @@ async def healthz(_: Request) -> Response:
             "version": VERSION,
             "device": k.device if k else None,
             "loaded": k is not None,
+            "checkpoints": kernels.CHECKPOINTS,
             "owner": None if own is None else {**own.stats, "waiting_cells": own._cells},
         }
     )
