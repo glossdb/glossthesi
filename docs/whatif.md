@@ -178,6 +178,21 @@ A table of one series or a few is cut at several dates, one horizon
 apart; those answers share most of their history and count for less
 than their number.
 
+**Run of 2026-10-17, development tables, after the still rule moved
+to the residual spread** (step 3.2 of the plan of that day). A sign on
+117 as before, and the model agrees on 93% of 126 as before. No effect
+visible on 41 where it was 64; not answerable on 61 where it was 38;
+where the history shows nothing the model stays still on 58% of 71,
+against 90% at a tenth of the column's whole spread. The difference
+is two tables: Rossmann's school holiday, where 14 of 34 answers that
+were "no effect visible" are now "the model moves it", and the hourly
+load's temperature and radiation, 14 of 17. There the model answers a
+change the history's straight line does not show on both readings;
+at a tenth of the whole spread, which on those columns is many times
+the spread the regression leaves, those moves had passed as none. The
+90% was the threshold's, not the model's. The held-out tables were not
+run (the held-out budget, `../glosstheval/docs/evaluation.md`).
+
 ## Candidates behind the three predictions
 
 On 2026-10-16 two forecasting models, Timestral-209M and t0-gamma,
