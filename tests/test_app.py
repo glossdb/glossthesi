@@ -646,7 +646,7 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     assert r.status_code == 200, r.text
     answer = r.json()
     assert answer["answer"]["errors"] == [] and answer["answer"]["changed"] == ["x"]
-    assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low"}
+    assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low", "history_value"}
     assert any(a["value"] == "no confounding" for a in answer["answer"]["assumptions"])  # the caller's assumption, said on every answer
     # Three kinds of rows per member and period, each at the levels asked: held back, as planned, under the scenario.
     assert len(_rows(answer, member="a")) == 3 * 4 * 3
@@ -719,7 +719,7 @@ def test_a_member_too_short_for_its_grain_fails_alone_with_the_number_it_needs(c
              "y": [50.0 + (i % 5) for i in range(40)] + [None] * 4, "x": [float(i % 2) for i in range(40)] + [0.0, 0.0, 1.0, 1.0], "z": [float(i % 3) for i in range(44)]}  # fmt: skip
     r = client.send("/whatif", WHATIF, table)
     assert r.status_code == 200, r.text
-    assert r.json()["answer"]["errors"] == [{"member": "a", "error": "40 actual periods: 2 ahead need 47 behind them on this grain with 2 inputs"}]
+    assert r.json()["answer"]["errors"] == [{"member": "a", "error": "40 actual periods: 2 ahead need 50 behind them on this grain with 2 inputs, 2 changed"}]
 
 
 def test_the_whatif_takes_arrow_with_dates_and_answers_the_same(client):

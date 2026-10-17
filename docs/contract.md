@@ -168,7 +168,11 @@ own. The route promises a direction, not a size:
   member's own history shows the column higher where the input was
   higher, the calendar and the other inputs held, and the model
   moves it the same way. It is an association in that history, read
-  for the same period. The two estimates read the same rows with
+  for the same period and the period before: the input's value one
+  period back is held beside it, so what the column does in the
+  period after the input moves has its own slope, and a sustained
+  change's effect is the sum of the two (since 2026-10-17). The two
+  estimates read the same rows with
   the same features, so their agreement is one piece of evidence;
   that nothing which set the input also moved the column is the
   caller's assumption, declared in `assumptions`. No table records
@@ -196,11 +200,12 @@ the weekday and the hour the history's reading holds are UTC's. A
 member has one row per period and status.
 A member needs, behind the periods ahead, 26 actual periods or as
 many as the history's reading holds columns plus eight, whichever is
-more: with two inputs 26 on a monthly or weekly table, 26 on a daily
-one, 45 on an hourly one (the level, the trend, the year's cycle, the
-weekday, the hour and every input); a member with fewer fails alone and
-the error names the number. Its last 4,096 are read. A target's values
-in the rows ahead are ignored.
+more: with two inputs, both changed, 26 on a monthly or weekly table,
+26 on a daily one, 48 on an hourly one (the level, the trend, the
+year's cycle, the weekday, the hour, every input, and one lag of each
+changed input, which also costs the first row); a member with fewer
+fails alone and the error names the number. Its last 4,096 are read.
+A target's values in the rows ahead are ignored.
 
 An input is a number; a yes-or-no column is read as 1 and 0, and a
 text column as whether there is an entry (a holiday's name).
@@ -232,11 +237,13 @@ one would show as a disagreement.
 a list in the table's order, and `parts`, beside `errors` and
 `assumptions`: per member, column and changed input, what that input
 alone does to the column over the periods ahead by the member's
-history (`history_shift`, the mean over the periods, with
-`history_low` and `history_high`, its 90% interval), from the same
-regression as the joint estimate, so that the parts' estimates add
-up to it; their intervals do not add, and the joint interval is the
-one to read. A user reads the single levers and the pair in one
+history (`history_shift`, the mean over the periods, the lag's part
+included, with `history_low` and `history_high`, its 90% interval),
+from the same regression as the joint estimate, so that the parts'
+estimates add up to it; their intervals do not add, and the joint
+interval is the one to read. The joint regression holds the lag of
+every changed input, so a part differs from the single-input reading
+of the same lever by a little. A user reads the single levers and the pair in one
 picture: which lever carries the effect, and when two cancel.
 
 Several changed inputs are also checked together: each may lie
@@ -259,7 +266,7 @@ and level.
 | `status` | `held_back`: the last periods of the history, as many as there are ahead, predicted from the rows before them. `plan`: the periods ahead, inputs as planned. `scenario`: the same under the change. |
 | `level`, `value` | The quantile level and the model's quantile. |
 | `actual` | On `held_back` rows, what was recorded. The same on every level row of the point. |
-| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus what the member's own history says the change does at that period, and the 90% interval of that. The other inputs, the trend and the calendar's cycles are held. The same on every level row of the point. |
+| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus what the member's own history says the change does at that period, from the change made there and the change made the period before (the input's lag, held since 2026-10-17; nothing from before the first period ahead, whose row before is history), and the 90% interval of that. The other inputs, the trend and the calendar's cycles are held. A positive column whose trend over a history of two years or more, the calendar held, doubles it or halves it is read on its logarithm, and the change is a share of the plan's median at that period (since 2026-10-17; the reason says so). The same on every level row of the point. |
 
 And per member and column, the same on each of its rows:
 
@@ -270,7 +277,7 @@ And per member and column, the same on each of its rows:
 | `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing, or shows an effect on one reading only (the rows, or their changes from row to row), and the model moves the column; the history's estimate of the change points both ways over the periods ahead (a change that reverses, or two levers moving in different periods) and nets to nothing over the horizon as a whole. Where it points both ways and the horizon's mean is off zero, the sign is stated for the horizon as a whole and `basis` says so with the counts. |
 | `explains` | The share of the column the changed input explains in this member's history, the other inputs and the calendar held; the inputs together, where several are changed. |
 | `error` | The error of the level: the mean distance of the held-back median from what was recorded over the periods held back, in the column's own units. It is one window; it says how far the model's level was off, not how far the change is. The held-back rows carry the quantiles and the actual, so a caller counts how many of them fell inside a band. |
-| `history_error` | What the history leaves of the column: the spread of what remains once the level, the trend, the calendar's cycles and the inputs are held, in the column's own units. The history's estimate of the change (`history_value`) is read against it, and a tenth of it is the `0` sign's threshold. Null where the history was not read. |
+| `history_error` | What the history leaves of the column: the spread of what remains once the level, the trend, the calendar's cycles and the inputs are held, in the column's own units (on a column read on its logarithm, that share of the plan's mean level). The history's estimate of the change (`history_value`) is read against it, and a tenth of it is the `0` sign's threshold. Null where the history was not read. |
 
 `no effect visible` means that this member's data does not show
 one, not that there is none.

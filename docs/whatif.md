@@ -19,9 +19,10 @@ Decided on 2026-10-01:
   agree: the member's own history shows the column higher where the
   input was higher, the calendar and the other inputs held, and the
   model moves it the same way. It is an association in that history,
-  read for the same period; whether the input caused it rests on the
-  caller's assumption that nothing which set the input also moved the
-  column, declared on every answer.
+  read for the same period and the period before (one lag of the
+  input is held, since 2026-10-17); whether the input caused it rests
+  on the caller's assumption that nothing which set the input also
+  moved the column, declared on every answer.
 - **The size as a guess between two estimates.** The model's shift
   and the history's own estimate are both returned. The model errs
   low more often than high.
@@ -39,9 +40,9 @@ not changed. So the direction cannot be scored against a truth; the
 agreement of the two estimates is the evidence there is, and it is
 one piece of evidence, not two. The model reads the same rows with
 the same features as the regression (the calendar's cycles and the
-inputs; TabICL's forecaster holds no lagged target), so their
-agreement says the association holds under a linear and under a
-flexible fit. A lever set by something that also moved the column (a
+inputs; TabICL's forecaster holds no lagged target, and the lag of
+the changed input is the regression's alone), so their agreement
+says the association holds under a linear and under a flexible fit. A lever set by something that also moved the column (a
 promotion scheduled when demand was expected high) gets a confident
 sign from both, and the wrong one where the lever's own effect goes
 the other way; on synthetic series with such a lever the review of
@@ -60,7 +61,28 @@ Every member is read on its own, and every target on its own
    ahead. The weights are the ones the service already holds.
 2. **The history is read** for how the target moved with the changed
    input: a slope, with the other inputs, the trend, the year's cycle
-   and, by grain, the day of the week and the hour of the day held.
+   and, by grain, the day of the week and the hour of the day held,
+   and beside it the input's value one period before (`LAG`): what
+   the column does in the period after the input moves, a dip after a
+   promotion or a price's carry-over, has its own slope, and a
+   sustained change's effect is the sum of the two. The history's
+   estimate for a period ahead is the change made there times the
+   first slope plus the change made the period before times the
+   second; the first period ahead has only the first, its row before
+   being history. Where the lag's slope is off zero on both readings
+   the reason says whether the effect carries into the period after
+   or the column moves back then. Before 2026-10-17 the same-period
+   slope stood alone, and could state the sign of a sustained change
+   wrong where the period after undoes it.
+   A positive column whose fitted trend over a history of two years
+   or more, the calendar held, doubles it or halves it (`GROWTH`) is
+   read on its logarithm (under two years a trend and the year's
+   cycle are not told apart, so the column is read on amounts): what an input does
+   to a column that grew is a share of its level, not an amount, and
+   a straight line on amounts misreads it (its interval, in amounts
+   of an early level, is too narrow for the late ones). The slopes
+   are translated at the plan's level per period, and the reason says
+   so (since 2026-10-17).
    It is read twice, on the rows and on their changes from one row to
    the next; a drift two columns merely share shows only in the
    first. The history is drawn again 300 times in runs of
@@ -204,6 +226,37 @@ the spread the regression leaves, those moves had passed as none. The
 90% was the threshold's, not the model's. The held-out tables were not
 run (the held-out budget, `../glosstheval/docs/evaluation.md`).
 
+**Run of 2026-10-17, development tables, with one lag of the input
+in the history's reading** (step 3.7; GK-57 and GK-58 in
+`../glosstheval/docs/findings.md`). The lag's slope is off zero on
+both readings on 31 of 219 answers: the effect carries into the period
+after on 13 (the German market's PV and wind forecast on 7 of 8 cuts,
+Rossmann's school holiday on 6 of 60), the column moves back in the
+period after on 18 (the German market's load forecast on 8 of 8, the
+hourly load's temperature on 7 of 12, the school holiday on 3), and on
+Rossmann's promotion, the largest instance, on none of 60: a weekly
+promotion's effect is in its week. A sign on 117 as before, the model
+agreeing on 93% of 126 as before; the sizes move where the lag takes
+its share (the promotion from 1.02 to 1.11 of the history's estimate,
+the school holiday from 0.80 to 0.52). The model's scenario lies
+inside the history's 90% interval on 67% of 197 series, where 64%
+before the lag: 76 to 90% on Rossmann's weekly stores, 55 to 71% on
+the daily tables, 10 to 44% on the hourly ones, where the interval is
+narrow (below). Seven answers went from no effect visible to not
+answerable, saying the history's estimate points both ways over the
+periods ahead: six on the hourly radiation, which the suite changes
+in the daylight hours only, so the first night hour carries the lag's
+slope alone and the other way, and the change nets to nothing over
+the day. The logs reading for a column that grew (step 3.8) fires on
+no development series: Rossmann's stores move by 0.92 to 1.33 over
+2.3 years, Favorita's and M5's sales hold zeros, the hourly and the
+air-quality histories are under two years; its record repeats every
+count. Two rules for growth were dropped the same hour: a quarter
+against a quarter took a year's season for growth (the air-quality
+nitrogen oxides, 2.9-fold between winter and summer), and a fitted
+trend on a half-year of hourly history could not be told from the
+year's cycle (a fiftieth on one series, 32-fold on another).
+
 ## Candidates behind the three predictions
 
 On 2026-10-16 two forecasting models, Timestral-209M and t0-gamma,
@@ -315,9 +368,10 @@ with it; an interaction between two changed inputs.
   negative-control columns the lever cannot touch, a permuted lever
   as the chance line, decreases beside increases; then data with a
   truth.
-- **One lag of the input in the history's reading** (step 3): the
-  same-period slope misses a dip after a promotion and a price's
-  carry-over, and can state the sign of a sustained change wrong.
+- **More lags of the input**, where one period after is not where
+  the carry-over ends (a daily table, a month's price). One lag is
+  held since 2026-10-17; how often it shows is in the record of that
+  day.
 - **Trial data** as the history for a what-if.
 - **A model trained on interventions.** CausalLongPFN (Zare et al.,
   arXiv 2606.05797, 2026) takes a history and a planned future input,

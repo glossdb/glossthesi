@@ -10,11 +10,18 @@ Every member is read on its own, and every target on its own.
 - The member's own history is read for how the target moved with
   the changed input, the other inputs, the trend and the calendar's
   cycles held: a slope with an interval from resampling, read twice,
-  on the rows and on their changes from one row to the next. Several
-  inputs changed at once are read together: the history's estimate
-  is the sum of what each does, its interval from the same draws
-  summed the same way, so an interaction between two inputs is not
-  something the history reads.
+  on the rows and on their changes from one row to the next. The
+  input's value one period before is held beside it (`LAG`): what
+  the column does in the period after the input moves, a dip after a
+  promotion or a price's carry-over, has its own slope, and a
+  sustained change's effect is the sum of the two. Several inputs
+  changed at once are read together: the history's estimate is the
+  sum of what each does, its interval from the same draws summed the
+  same way, so an interaction between two inputs is not something
+  the history reads. A positive column that doubled or halved over
+  its history (`GROWTH`) is read on its logarithm: what an input does
+  to such a column is a share of its level, not an amount, and the
+  slopes are translated at the plan's level.
 - The sign is stated where the two agree: the history shows the
   target higher where the input, or the inputs together, was higher,
   and the model moves it the same way. Both read the same history
@@ -43,6 +50,9 @@ BEYOND_SHARE = 0.10  # a combination is beyond where more than this share of the
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
 STILL = 0.10  # a shift under this share of what the history's regression leaves of the column (its residual spread) counts as none
 MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
+LAG = 1  # periods: each changed input's value this many periods before is held beside it in the history's reading
+GROWTH = 2.0  # a positive column whose trend over a history of two years or more, the calendar held, moves it this many-fold or a this-many-th is read on its logarithm
+SPAN = np.timedelta64(730, "D")  # the history a trend is told from the year's cycle over: less, and the trend is not read
 CONTEXT = 4096  # the past periods TabICL's forecaster reads at most
 MIN_HISTORY = 26  # the rows a member needs behind a prediction
 MEDIAN = 0.5
@@ -88,11 +98,13 @@ def design(stamps: np.ndarray, inputs: np.ndarray) -> np.ndarray:
     return np.column_stack([*held, inputs])
 
 
-def rows_needed(stamps: np.ndarray, inputs: int) -> int:
+def rows_needed(stamps: np.ndarray, inputs: int, changed: int = 0) -> int:
     """The actual periods a member needs behind a prediction: `MIN_HISTORY`, or the columns the history's reading
     holds plus `EXTRA_ROWS` where that is more — 16 with two inputs on a monthly or weekly table, 22 on a daily, 45 on
-    an hourly — so that the door says so instead of the reading answering "too short"."""
-    return max(MIN_HISTORY, design(stamps, np.zeros((len(stamps), inputs))).shape[1] + EXTRA_ROWS)
+    an hourly — so that the door says so instead of the reading answering "too short". Each changed input adds a
+    column, its lag, and the lag costs the first `LAG` rows."""
+    columns = design(stamps, np.zeros((len(stamps), inputs))).shape[1] + changed
+    return max(MIN_HISTORY, columns + EXTRA_ROWS + (LAG if changed else 0))
 
 
 def places(rng: np.random.Generator) -> np.ndarray:
@@ -101,7 +113,13 @@ def places(rng: np.random.Generator) -> np.ndarray:
 
 
 def history(
-    stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.ndarray, run: int | None = None, together: list[int] | None = None
+    stamps: np.ndarray,
+    y: np.ndarray,
+    inputs: np.ndarray,
+    starts: np.ndarray,
+    run: int | None = None,
+    together: list[int] | None = None,
+    lagged: list[int] | None = None,
 ) -> dict[str, np.ndarray]:
     """Per input (the last axis), how `y` moved with it over one
     series' history, the other inputs, the trend and the cycles held,
@@ -115,27 +133,34 @@ def history(
     unexplained (`free`), and how much of what the rest leaves of `y`
     the input explains (`explains`); with `together`, the indices of
     inputs changed at once, how much they explain as a set
-    (`explains_together`). An input that cannot be read is NaN, with
-    `free` at zero."""
-    k = inputs.shape[1]
+    (`explains_together`). With `lagged`, the indices of inputs whose
+    value `LAG` periods before is held beside them, that lag's slope
+    and draws on both readings (`lag_slope`, `lag_draws`,
+    `lag_slope_on_changes`, `lag_draws_on_changes`; NaN for an input
+    not lagged): what the column does in the period after the input
+    moves. `free` and `explains` are then the input's with its lag,
+    since an input that moves slowly is its own lag's twin. An input
+    that cannot be read is NaN, with `free` at zero."""
+    k, lagged = inputs.shape[1], list(lagged or [])
     slopes, draws, free, explains = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.zeros(k), np.full(k, np.nan)
     slopes_c, draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
+    lag_slopes, lag_draws, lag_slopes_c, lag_draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
     out = {
-        "slope": slopes,
-        "draws": draws,
-        "slope_on_changes": slopes_c,
-        "draws_on_changes": draws_c,
-        "free": free,
-        "explains": explains,
-        "explains_together": np.nan,
-        "residual_sd": np.nan,
-    }
+        "slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan, "residual_sd": np.nan,
+        "lag_slope": lag_slopes, "lag_draws": lag_draws, "lag_slope_on_changes": lag_slopes_c, "lag_draws_on_changes": lag_draws_c,
+    }  # fmt: skip
     full = design(stamps, inputs)
     held = full.shape[1] - k
+    if lagged:  # the lag columns come last: each lagged input's value LAG rows before, unknown on the first LAG rows
+        behind = np.full((len(stamps), len(lagged)), np.nan)
+        behind[LAG:] = inputs[:-LAG, lagged]
+        full = np.column_stack([full, behind])
+    lag_at = {j: held + k + i for i, j in enumerate(lagged)}  # the column of each lagged input's lag
+    own = lambda j: [held + j, *([lag_at[j]] if j in lag_at else [])]  # noqa: E731  # an input's columns: itself and its lag
     keep = ~np.isnan(y) & ~np.isnan(full).any(axis=1)
     run = run_of_rows(minutes(stamps)) if run is None else run
     x, seen = full[keep], y[keep]
-    varies = np.std(x[:, held:], axis=0) > 0 if len(seen) else np.zeros(k, dtype=bool)
+    varies = np.std(x[:, held : held + k], axis=0) > 0 if len(seen) else np.zeros(k, dtype=bool)
     if len(seen) < x.shape[1] + EXTRA_ROWS or not varies.any():
         return out
 
@@ -149,29 +174,45 @@ def history(
     out["residual_sd"] = float(np.sqrt(left / max(len(seen) - x.shape[1], 1)))  # what the level, trend, cycles and inputs leave of y
     for j in np.flatnonzero(varies):
         at = held + j
-        others = np.delete(x, at, axis=1)
+        others = np.delete(x, own(j), axis=1)
         fitted = others @ np.linalg.lstsq(others, x[:, at], rcond=None)[0]
         free[j] = float(np.var(x[:, at] - fitted) / np.var(x[:, at]))
         slopes[j] = coef[at]
+        if j in lag_at:
+            lag_slopes[j] = coef[lag_at[j]]
         without = np.sum((seen - others @ np.linalg.lstsq(others, seen, rcond=None)[0]) ** 2)
         explains[j] = float(1 - left / without) if without > 0 else 0.0
     if together and all(varies[j] for j in together):
-        others = np.delete(x, [held + j for j in together], axis=1)
+        others = np.delete(x, [c for j in together for c in own(j)], axis=1)
         without = np.sum((seen - others @ np.linalg.lstsq(others, seen, rcond=None)[0]) ** 2)
         out["explains_together"] = float(1 - left / without) if without > 0 else 0.0
     # The changes from one row to the next: of the column and of every input; the level, trend and cycles stay.
     dx, dy = np.column_stack([full[1:, :held], np.diff(full[:, held:], axis=0)]), np.diff(y)
     keep = ~np.isnan(dy) & ~np.isnan(dx).any(axis=1)
     dx, dy = dx[keep], dy[keep]
-    moving = varies & (np.std(dx[:, held:], axis=0) > 0) if len(dy) >= dx.shape[1] + EXTRA_ROWS else np.zeros(k, dtype=bool)
+    moving = varies & (np.std(dx[:, held : held + k], axis=0) > 0) if len(dy) >= dx.shape[1] + EXTRA_ROWS else np.zeros(k, dtype=bool)
+    lags = [lag_at[j] for j in lagged]  # the lag columns, in the order of `lagged`
+    lambda coef, which, cols: np.array([coef[c] for c in cols]) if which.any() else coef[:0]
+
+    def read_lags(coef: np.ndarray, which: np.ndarray, into: np.ndarray) -> None:
+        for j, c in zip(lagged, lags):
+            if which[j]:
+                into[j] = coef[c]
+
     if moving.any():
-        slopes_c[moving] = np.linalg.lstsq(dx, dy, rcond=None)[0][held:][moving]
+        coef_c = np.linalg.lstsq(dx, dy, rcond=None)[0]
+        slopes_c[moving] = coef_c[held : held + k][moving]
+        read_lags(coef_c, moving, lag_slopes_c)
     for b in range(RESAMPLES):
         r = rows(b, len(seen))
-        draws[b, varies] = np.linalg.lstsq(x[r], seen[r], rcond=None)[0][held:][varies]
+        coef_b = np.linalg.lstsq(x[r], seen[r], rcond=None)[0]
+        draws[b, varies] = coef_b[held : held + k][varies]
+        read_lags(coef_b, varies, lag_draws[b])
         if moving.any():
             r = rows(b, len(dy))
-            draws_c[b, moving] = np.linalg.lstsq(dx[r], dy[r], rcond=None)[0][held:][moving]
+            coef_b = np.linalg.lstsq(dx[r], dy[r], rcond=None)[0]
+            draws_c[b, moving] = coef_b[held : held + k][moving]
+            read_lags(coef_b, moving, lag_draws_c[b])
     return out
 
 
@@ -211,6 +252,25 @@ def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
 
     reach = float(np.quantile(nearest(p, True), REACH))
     return bool(np.mean(nearest(a, False) > reach) > BEYOND_SHARE)
+
+
+def growth(stamps: np.ndarray, y: np.ndarray) -> float:
+    """How many-fold the column's fitted trend moves it over its
+    history, the calendar's cycles held: the regression of its
+    logarithm on the design without inputs, whose trend runs from 0
+    to 1 over the history, so the trend's coefficient is the whole
+    change. 1 where a value is not positive, the history is too short
+    to read, or it spans less than `SPAN`: under two years a straight
+    trend and the year's cycle are not told apart (on a half-year of
+    hourly load the fit said a fiftieth, on a year of air quality a
+    quarter against a quarter took the season's swing for growth)."""
+    known = ~np.isnan(y)
+    if not known.any() or not (y[known] > 0).all() or stamps[known][-1] - stamps[known][0] < SPAN:
+        return 1.0
+    x = design(stamps, np.zeros((len(stamps), 0)))[known]
+    if len(x) < x.shape[1] + EXTRA_ROWS:
+        return 1.0
+    return float(np.exp(np.linalg.lstsq(x, np.log(y[known]), rcond=None)[0][1]))
 
 
 def spread(y: np.ndarray) -> float:
@@ -296,7 +356,6 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     changed = differs
     one = len(changed) == 1
     name = (lambda c: "the input") if one else (lambda c: f"the input `{c}`")
-    moved = np.array([float(np.nanmean(deltas[c])) if (~np.isnan(deltas[c])).any() else 0.0 for c in changed])
     # An empty cell is unknown, not zero. An input that is mostly empty is not read: the changed one cannot be
     # answered, another one is left out of what is held, and the reason says so. A row with a gap in an input
     # that is read is left out, so an input kept in spite of its gaps costs rows.
@@ -304,6 +363,19 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     for c in changed:
         if known.any() and np.isnan(member.inputs[c][known]).mean() > MOSTLY_EMPTY:
             return out | {"basis": f"{name(c)} is mostly empty in this member's history"}
+    # A positive column whose trend over its history, the calendar held, moves it GROWTH-fold or more (or shrinks it as
+    # much) is read on its logarithm: a straight line on amounts misreads a column whose effects are shares of its level.
+    seen_y = y[known]
+    grew = growth(member.stamps, y)
+    on_logs = grew >= GROWTH or grew <= 1 / GROWTH
+    # The level the logarithm's slopes are translated at: the plan's median per period, the last known value where that is not positive.
+    level = np.where(np.isfinite(plan) & (plan > 0), plan, seen_y[-1] if len(seen_y) else 1.0) if on_logs else np.ones(h)
+    logs = (
+        f"; the history is read on the column's logarithm, its trend over the history moving it {grew:.2f}-fold with the calendar held, so its slopes are shares of the level, translated at the plan's"
+        if on_logs
+        else ""
+    )
+    extra: list[str] = []  # notes said once the history is read
     there = known & ~np.isnan(np.column_stack([member.inputs[c] for c in changed])).any(axis=1)
     left_out = [c for c, v in member.inputs.items() if c not in changed and there.any() and np.isnan(v[there]).mean() > MOSTLY_EMPTY]
     names = [c for c in member.inputs if c not in left_out]
@@ -311,7 +383,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     note = "; not read, being mostly empty: " + ", ".join(f"`{c}`" for c in left_out) if left_out else ""
 
     def say(basis: str, **more) -> dict:
-        return out | more | {"basis": basis + note}
+        return out | more | {"basis": basis + "".join(extra) + note}
 
     for c in changed:
         past = member.inputs[c]
@@ -332,8 +404,11 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
             return say("the inputs as planned, together, go beyond what the history holds: no row of the history lies near their combination")
         if beyond_together(past, np.column_stack([member.scenario[c] for c in changed])):
             return say("the change goes beyond what the history holds for the inputs together: no row of the history lies near their combination")
-    read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts, together=None if one else at)
-    out["history_error"] = float(read["residual_sd"])  # what the history leaves of the column: the error its estimate is read against
+    read = history(
+        member.stamps, np.log(y) if on_logs else y, np.column_stack([member.inputs[c] for c in names]), starts, together=None if one else at, lagged=at
+    )
+    extra.append(logs)
+    out["history_error"] = float(read["residual_sd"] * level.mean())  # what the history leaves of the column: the error its estimate is read against
     for c, j in zip(changed, at):
         if not np.isfinite(read["slope"][j]) or not np.isfinite(read["slope_on_changes"][j]):
             return say("the history is too short to read how the column moved with the input" + ("" if one else f" `{c}`"))
@@ -342,31 +417,48 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         if read["free"][j] < SEPARABLE:
             return say(f"{name(c)} cannot be told apart from {_tied(member, c, names)}")
     ends = [(1 - INTERVAL) / 2, 1 - (1 - INTERVAL) / 2]
-    # The joint change: per draw, the sum over the changed inputs of the draw's slope times the input's change;
-    # as the mean change, for the sign, and per period, for the interval of the history's estimate.
-    change = np.column_stack([deltas[c] for c in changed])  # (periods, inputs)
-    slopes = np.array([read["slope"][j] for j in at])
+    # The joint change: per draw, the sum over the changed inputs of the draw's slope times the input's change there,
+    # plus the lag's slope times the input's change the period before (nothing in the first period ahead: the last
+    # history row is the same as planned and under the change); as the mean over the periods ahead, for the sign,
+    # and per period, for the interval of the history's estimate.
+    change = np.nan_to_num(np.column_stack([deltas[c] for c in changed]))  # (periods, inputs)
+    before = np.zeros_like(change)  # the change LAG periods before each period ahead
+    before[LAG:] = change[:-LAG]
+    slopes, lag_slopes = np.array([read["slope"][j] for j in at]), np.array([read["lag_slope"][j] for j in at])
     draws, draws_c = read["draws"][:, at], read["draws_on_changes"][:, at]
-    lo, hi = np.nanquantile(draws @ moved, ends)
-    lo_c, hi_c = np.nanquantile(draws_c @ moved, ends)
-    # The history's estimate per period: the plan's median plus what the change made there does, by the slopes.
-    out["history_value"] = plan + change @ slopes
-    per_period = draws @ change.T  # (draws, periods)
+    lag_draws, lag_draws_c = read["lag_draws"][:, at], read["lag_draws_on_changes"][:, at]
+    mean_change, mean_before = change.mean(axis=0), before.mean(axis=0)  # per input
+    moved = (
+        slopes @ mean_change + lag_slopes @ mean_before
+    )  # the history's estimate of the change over the horizon as a whole, in the regression's units (the sign is all that is read from it)
+    lo, hi = np.nanquantile(draws @ mean_change + lag_draws @ mean_before, ends)
+    lo_c, hi_c = np.nanquantile(draws_c @ mean_change + lag_draws_c @ mean_before, ends)
+    # The history's estimate per period: the plan's median plus what the change made there and the period before does;
+    # on a column read on its logarithm, that times the plan's level there.
+    out["history_value"] = plan + level * (change @ slopes + before @ lag_slopes)
+    per_period = level * (draws @ change.T + lag_draws @ before.T)  # (draws, periods)
     low_p, high_p = np.nanquantile(per_period, ends[0], axis=0), np.nanquantile(per_period, ends[1], axis=0)
     out["history_low"], out["history_high"] = plan + low_p, plan + high_p
     # What each changed input alone does, as the mean over the periods ahead, with its interval from the same draws:
     # the parts add up to the joint estimate, so a user combines the single-lever and the multi-lever readings.
-    mean_change = np.nanmean(change, axis=0)  # per input
+    part = lambda j, s, l: (level * (np.outer(s, change[:, j]) + np.outer(l, before[:, j]))).mean(axis=1)  # noqa: E731, E741  # per draw, over the periods
     out["parts"] = [
-        {
-            "input": c,
-            "history_shift": float(slopes[j] * mean_change[j]),
-            "history_low": float(np.nanquantile(draws[:, j] * mean_change[j], ends[0])),
-            "history_high": float(np.nanquantile(draws[:, j] * mean_change[j], ends[1])),
-        }
+        {"input": c, "history_shift": float(part(j, slopes[j : j + 1], lag_slopes[j : j + 1])[0]),
+         "history_low": float(np.nanquantile(part(j, draws[:, j], lag_draws[:, j]), ends[0])),
+         "history_high": float(np.nanquantile(part(j, draws[:, j], lag_draws[:, j]), ends[1]))}
         for j, c in enumerate(changed)
-    ]
+    ]  # fmt: skip
     what = "the input" if one else "the inputs together"
+    # What the period after says: where the lag's slope is off zero on both readings, the effect carries into the
+    # period after the input moves, or the column moves back then (a dip after a promotion); said beside the sign.
+    after = []
+    for j, c in enumerate(changed):
+        l_lo, l_hi = np.nanquantile(lag_draws[:, j], ends)
+        lc_lo, lc_hi = np.nanquantile(lag_draws_c[:, j], ends)
+        if (l_lo > 0 and lc_lo > 0) or (l_hi < 0 and lc_hi < 0):
+            same = np.sign(lag_slopes[j]) == np.sign(slopes[j])
+            after.append(f"{'the effect carries into' if same else 'the column moves back in'} the period after {'the input' if one else f'`{c}`'} moves")
+    after = "; the history shows " + ", and ".join(after) if after else ""
     # The sign is the horizon's as a whole: the mean change over the periods ahead. Where the history's estimate is off
     # zero upward in some periods and downward in others (two levers moving in different periods, a change that
     # reverses) the sign says so beside it, and where such a change nets to nothing it is not "no effect visible".
@@ -375,11 +467,11 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         f"; the history's estimate points both ways over the periods ahead ({up} up, {down} down), and the sign is the horizon's as a whole"
         if up and down
         else ""
-    )
+    ) + after
     # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
     if shows:
-        way = np.sign(slopes @ moved)
+        way = np.sign(moved)
         if np.sign(shift) == way and way != 0:
             return say(
                 f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way{both_ways}",
@@ -388,7 +480,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         return say("the model and the history disagree on the direction" + both_ways)
     if up and down:
         return say(
-            f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down) and nets to nothing over the horizon as a whole"
+            f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down) and nets to nothing over the horizon as a whole{after}"
         )
     # One reading off zero and the other not is said as such: it is not the same as neither showing anything.
     on_rows, on_changes = lo > 0 or hi < 0, lo_c > 0 or hi_c < 0
@@ -402,10 +494,10 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         said = f"the history shows no effect of {what} on the column"
     # Still is judged against what the history leaves of the column, not its whole spread: a trending column's spread is
     # mostly its trend, and a shift of several residual spreads would otherwise pass as none.
-    left = read["residual_sd"] if np.isfinite(read["residual_sd"]) and read["residual_sd"] > 0 else spread(y)
+    left = read["residual_sd"] * level.mean() if np.isfinite(read["residual_sd"]) and read["residual_sd"] > 0 else spread(y)
     if abs(shift) < STILL * left:
-        return say(said + ", and the model moves it by less than a tenth of what the history leaves of its spread", sign="0")
-    return say(said + ", and the model moves it")
+        return say(said + ", and the model moves it by less than a tenth of what the history leaves of its spread" + after, sign="0")
+    return say(said + ", and the model moves it" + after)
 
 
 def _tied(member: Member, changed: str, read: list[str]) -> str:
@@ -437,7 +529,7 @@ def assumptions() -> list[dict]:
         {
             "field": "sign",
             "value": "no confounding",
-            "basis": "assumed: nothing that set the input also moved the column, beyond the other inputs and the calendar's cycles, which are held. The model and the history's regression read the same rows with the same features, so their agreement is one piece of evidence: the association holds under a linear and under a flexible fit. It is read for the same period; a lag of the input is not held (docs/whatif.md)",
+            "basis": "assumed: nothing that set the input also moved the column, beyond the other inputs and the calendar's cycles, which are held. The model and the history's regression read the same rows with the same features, so their agreement is one piece of evidence: the association holds under a linear and under a flexible fit. It is read for the same period and the period before (`LAG`); an effect that reaches further back is not read (docs/whatif.md)",
         },
         {
             "field": "sign",
@@ -448,6 +540,16 @@ def assumptions() -> list[dict]:
             "field": "sign",
             "value": STILL,
             "basis": "assumed: a shift under this share of what the history's regression leaves of the column (its residual spread; the column's own spread where no regression is read) counts as none. At the former threshold, a tenth of the column's whole spread, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect; that measures the model's stillness at a threshold, not the threshold. At this one, on the development tables of 2026-10-17, it stayed under on 58% of 71: a shift the lenient threshold had passed as none is a move (docs/whatif.md)",
+        },
+        {
+            "field": "history_value",
+            "value": LAG,
+            "basis": "assumed: each changed input's value this many periods before is held beside it in the history's reading (since 2026-10-17), so what the column does in the period after the input moves has its own slope, and a sustained change's effect is the sum of the two; the estimate for the first period ahead is the same-period slope's alone, the last history row being the same as planned and under the change. Where the lag's slope is off zero on both readings the reason says whether the effect carries into the period after or the column moves back then",
+        },
+        {
+            "field": "history_value",
+            "value": GROWTH,
+            "basis": "assumed: a column every value of which is positive and whose fitted trend over a history of two years or more, the calendar's cycles held, moves it this many-fold or more, or shrinks it as much, is read on its logarithm (since 2026-10-17; under two years a trend and the year's cycle are not told apart, and the column is read on amounts): what an input does to a column that grew is a share of its level, and a straight line on amounts misreads it. Its slopes are translated at the plan's level, the change times the plan's median at that period, and what the history leaves of the column (`history_error`) as a share of the plan's mean level; the reason says so",
         },
         {
             "field": "basis",
@@ -467,7 +569,7 @@ def assumptions() -> list[dict]:
         {
             "field": "basis",
             "value": EXTRA_ROWS,
-            "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, and every input): with two inputs 16 rows on a monthly or weekly table, 22 on a daily, 45 on an hourly; fewer is said as too short",
+            "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, every input, and a lag of each changed input, which also costs the first row): with two inputs both changed 19 rows on a monthly or weekly table, 25 on a daily, 48 on an hourly; fewer is said as too short",
         },
         {
             "field": "history_low",
