@@ -29,9 +29,7 @@ def test_misfit_reproduces_the_density_oracle(k):
     d = np.load(FIXTURES / "density_scores.npz")
     # The fixture recorded the package's own orderings; the read takes them
     # as given and defaults to identity and reverse otherwise.
-    logs = k.misfit(
-        d["x_test"].astype(np.float64), perms=list(d["perms"]), random_state=42, train=d["x_train"].astype(np.float64)
-    )
+    logs = k.misfit(d["x_test"].astype(np.float64), perms=list(d["perms"]), random_state=42, train=d["x_train"].astype(np.float64))
     # A score is the product of 2 x cols conditional densities, so the
     # estimators' float noise compounds: a CPU with another BLAS than the
     # oracle's (x86 oneDNN against arm64 Accelerate) lands 1e-3 off in

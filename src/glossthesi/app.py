@@ -215,7 +215,7 @@ def _door(read):
             refusal, status, headers = e, 413, None
         except (kernels.KernelError, forecast.ForecastError, whatif.WhatifError) as e:
             refusal, status, headers = e, 422, None
-        except Exception as e:  # a failure is a 500 with the traceback in the log, not on the wire
+        except Exception as e:  # noqa: BLE001 — a failure is a 500 with the traceback in the log, not on the wire
             telemetry.log.error("request_failed", extra={"route": route, "caller": caller}, exc_info=e)
             telemetry.refused(500, caller, route, type(e).__name__)
             return JSONResponse({"error": f"the service failed: {type(e).__name__}"}, status_code=500)
@@ -243,7 +243,12 @@ def _levels(spec: dict[str, Any], grid: tuple[float, float] | None = None) -> li
     out = []
     for a in value:
         if not isinstance(a, (int, float)) or isinstance(a, bool) or not (low <= float(a) <= high if grid else 0.0 < float(a) < 1.0):
-            raise _spec("levels", f"every one of `levels` lies between {low:g} and {high:g}, the model's own grid" if grid else "every one of `levels` lies strictly between 0 and 1")
+            raise _spec(
+                "levels",
+                f"every one of `levels` lies between {low:g} and {high:g}, the model's own grid"
+                if grid
+                else "every one of `levels` lies strictly between 0 and 1",
+            )
         out.append(float(a))
     return out
 
@@ -302,7 +307,9 @@ class Forecast:
         if len(set(targets)) != len(targets):
             raise _spec("targets", "`targets` names a column twice")
         origins = spec.get("origins")
-        if origins is not None and not ((isinstance(origins, int) and not isinstance(origins, bool) and origins >= 1) or (isinstance(origins, list) and origins)):
+        if origins is not None and not (
+            (isinstance(origins, int) and not isinstance(origins, bool) and origins >= 1) or (isinstance(origins, list) and origins)
+        ):
             raise _spec("origins", "`origins` is a number of periods to walk, or a non-empty list of periods to forecast from")
         horizon = spec.get("horizon", 1 if origins is not None else None)
         if not isinstance(horizon, int) or isinstance(horizon, bool) or not 1 <= horizon <= forecast.MAX_HORIZON:
@@ -378,7 +385,9 @@ class Forecast:
     async def serve(own: Owner, caller: str, plan: _ForecastPlan) -> tuple[pa.Table, dict]:
         series = [one.series for one in plan.inputs]
         work = sum((one.columns + len(one.past)) * one.length for one in series)
-        got = await asyncio.wrap_future(own.exclusive(caller, "forecast", work, lambda k: k.chronos.forecast(series, plan.horizon, plan.levels, plan.spans, plan.grain)))
+        got = await asyncio.wrap_future(
+            own.exclusive(caller, "forecast", work, lambda k: k.chronos.forecast(series, plan.horizon, plan.levels, plan.spans, plan.grain))
+        )
         periods = plan.table.column("period")
         h, levels = plan.horizon, np.asarray(plan.levels)
         cols: dict[str, list] = {name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit")}
@@ -497,7 +506,11 @@ class Misfit:
         x = np.full((table.num_rows, len(names)), np.nan)
         for j, name in enumerate(names):
             if j in categorical:
-                words = wire.categories(table, name) if wire.is_category(table.schema.field(name)) else np.array(["" if v is None else str(v) for v in wire.clean(table.column(name).to_pylist())], dtype=object)
+                words = (
+                    wire.categories(table, name)
+                    if wire.is_category(table.schema.field(name))
+                    else np.array(["" if v is None else str(v) for v in wire.clean(table.column(name).to_pylist())], dtype=object)
+                )
                 codes = {key: i for i, key in enumerate(sorted({w for w in words if w != ""}))}
                 x[:, j] = [np.nan if w == "" else codes[w] for w in words]
             else:
@@ -544,7 +557,7 @@ def _stamps(table: pa.Table) -> np.ndarray:
         cast = column.cast(pa.timestamp("ms")) if not (pa.types.is_timestamp(kind) and kind.tz) else column.cast(pa.timestamp("ms", tz=kind.tz))
         return np.asarray(cast.to_numpy(zero_copy_only=False)).astype("datetime64[ms]")
     except (pa.ArrowException, TypeError, ValueError) as e:
-        raise Refusal(f"/whatif needs `period` as a date or a timestamp: {e}")
+        raise Refusal(f"/whatif needs `period` as a date or a timestamp: {e}") from e
 
 
 def _input(table: pa.Table, name: str) -> np.ndarray:
@@ -614,7 +627,9 @@ class Whatif:
                 raise Refusal(f"member `{member}`: a period ahead that is not after its last actual row — the history comes first")
             h = len(planned)
             actual = actual[-whatif.CONTEXT :]
-            moved_here = sum(1 for c in inputs if not ((values[c][planned] == values[c][changed]) | (np.isnan(values[c][planned]) & np.isnan(values[c][changed]))).all())
+            moved_here = sum(
+                1 for c in inputs if not ((values[c][planned] == values[c][changed]) | (np.isnan(values[c][planned]) & np.isnan(values[c][changed]))).all()
+            )
             need = whatif.rows_needed(stamps[actual], len(inputs), moved_here)
             if len(actual) < need + h:
                 why = f" on this grain with {len(inputs)} inputs, {moved_here} changed" if need > whatif.MIN_HISTORY else ""
@@ -622,8 +637,8 @@ class Whatif:
                 continue
             members.append(
                 whatif.Member(member, stamps[actual], stamps[planned], {t: values[t][actual] for t in targets}, {c: values[c][actual] for c in inputs},
-                              {c: values[c][planned] for c in inputs}, {c: values[c][changed] for c in inputs})  # fmt: skip
-            )
+                              {c: values[c][planned] for c in inputs}, {c: values[c][changed] for c in inputs})
+            )  # fmt: skip
             rows.append((actual[-h:], planned, changed))
 
         def differs(c: str) -> bool:
@@ -631,7 +646,11 @@ class Whatif:
 
         moved = [c for c in inputs if differs(c)]
         if members and not moved:
-            raise Refusal("the `plan` and `scenario` rows hold the same inputs: nothing is changed", 422, [{"field": "status", "error": "no input differs between `plan` and `scenario`"}])
+            raise Refusal(
+                "the `plan` and `scenario` rows hold the same inputs: nothing is changed",
+                422,
+                [{"field": "status", "error": "no input differs between `plan` and `scenario`"}],
+            )
         return _WhatifPlan(table, targets, levels, moved, members, rows, errors)
 
     @staticmethod
@@ -661,7 +680,24 @@ class Whatif:
             return out
 
         periods = plan.table.column("period")
-        names = ("member", "period", "column", "status", "level", "value", "actual", "history_value", "history_low", "history_high", "sign", "confidence", "basis", "explains", "error", "history_error")
+        names = (
+            "member",
+            "period",
+            "column",
+            "status",
+            "level",
+            "value",
+            "actual",
+            "history_value",
+            "history_low",
+            "history_high",
+            "sign",
+            "confidence",
+            "basis",
+            "explains",
+            "error",
+            "history_error",
+        )
         cols: dict[str, list] = {name: [] for name in names}
         parts: list[dict] = []  # per member, column and changed input: what that input alone does, by the history
         for i, t, three, said in await run_in_threadpool(read):
@@ -690,7 +726,14 @@ class Whatif:
             cols["history_error"] += [said["history_error"]] * n
         text = ("member", "column", "status", "sign", "confidence", "basis")
         table = pa.table(
-            {name: wire.taken(periods, cols[name]) if name == "period" else pa.array(cols[name], type=pa.string()) if name in text else pa.array(np.asarray(cols[name], dtype=np.float64), from_pandas=True) for name in names}
+            {
+                name: wire.taken(periods, cols[name])
+                if name == "period"
+                else pa.array(cols[name], type=pa.string())
+                if name in text
+                else pa.array(np.asarray(cols[name], dtype=np.float64), from_pandas=True)
+                for name in names
+            }
         )
         for e in errors:
             telemetry.item_failed(caller, "/whatif", e["error"])
