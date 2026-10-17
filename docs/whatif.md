@@ -244,18 +244,21 @@ the parts equal the single readings is a property of the code, kept
 by a test, not a finding. And
 several changed inputs are checked together: each may lie inside its
 own range while the history never held the combination (a promotion
-and a holiday that never fell together); where no row of the history
-lies near the scenario's combination, nearer than the loneliest
-history row lies from its own nearest neighbour in that space, the
-route states no sign and says whether the plan or the change goes
-beyond together. The reach is the history's own, with no number to
-choose; it is declared as an assumption on every answer. On the three
-tables the check fires on 5 of 80 series and columns: the German
-market's two forecasts as planned on 4, a change on the hourly load
-on 1, none on Rossmann, where promotion and holiday have fallen
-together; the parts equal the single-lever readings to the digit,
-and the direction holds on all 64 where the history shows the joint
-effect.
+and a holiday that never fell together); where the scenario's
+combination lies farther from every history row than the distance
+within which 99 of 100 history rows find a neighbour in that space,
+in more than a tenth of the periods ahead, the route states no sign
+and says whether the plan or the change goes beyond together. Until
+2026-10-17 the loneliest history row set the reach, with no number
+to choose; the review of that day showed one mis-keyed row disarming
+the check, so the reach is a quantile now and the share of periods
+is what fires it; both are declared on every answer. On the three
+tables the check as first built fired on 5 of 80 series and columns:
+the German market's two forecasts as planned on 4, a change on the
+hourly load on 1, none on Rossmann, where promotion and holiday have
+fallen together; the parts equal the single-lever readings to the
+digit, and the direction holds on all 64 where the history shows the
+joint effect.
 
 Tested the same day on the three development tables with two inputs
 named (80 series and columns; GK-50 in the evaluation's findings):

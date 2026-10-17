@@ -210,6 +210,13 @@ def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up(
     # A continuous pair: a corner the history never visited is beyond, a point among the rows is not.
     cloud = rng.normal(size=(300, 2))
     assert whatif.beyond_together(cloud, np.array([[6.0, 6.0]])) and not whatif.beyond_together(cloud, np.array([[0.3, -0.2]]))
+    # One mis-keyed history row (a price of 40) no longer sets the reach: the corner is still beyond.
+    assert whatif.beyond_together(np.vstack([cloud, [[0.0, 40.0]]]), np.array([[6.0, 6.0]]))
+    # One odd period among thirteen does not fire the check; two do; a plan drawn from the history itself does not.
+    ordinary = cloud[rng.choice(300, 13, replace=False)]
+    assert not whatif.beyond_together(cloud, ordinary)
+    assert not whatif.beyond_together(cloud, np.vstack([ordinary[:12], [[6.0, 6.0]]]))
+    assert whatif.beyond_together(cloud, np.vstack([ordinary[:11], [[6.0, 6.0], [6.0, -6.0]]]))
     # The parts of a joint reading add up to its estimate and equal the single readings.
     stamps, y, x, z = _weekly()
     starts = whatif.places(np.random.default_rng(1))

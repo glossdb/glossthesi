@@ -241,13 +241,14 @@ picture: which lever carries the effect, and when two cancel.
 
 Several changed inputs are also checked together: each may lie
 inside its own range while the history never held the combination.
-Where no row of the history lies near the scenario's combination of
-the changed inputs, nearer than the loneliest history row lies from
-its own nearest neighbour in that space with each input scaled by
-its spread, the route states no sign and `basis` says whether the
-inputs as planned or the change go beyond together. For switch
-inputs that is whether the two have been on together before. The
-reach is the history's own and is declared in `assumptions`.
+Where the scenario's combination of the changed inputs lies farther
+from every history row than the distance within which 99 of 100
+history rows find a neighbour in that space, each input scaled by its
+spread, in more than a tenth of the periods ahead, the route states
+no sign and `basis` says whether the inputs as planned or the change
+go beyond together. For switch inputs that is whether the two have
+been on together before. The reach and the share are declared in
+`assumptions`.
 
 **The answer table.** One row per member, column, status, period
 and level.

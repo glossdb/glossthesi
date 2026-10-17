@@ -38,6 +38,8 @@ import numpy as np
 RESAMPLES = 300
 INTERVAL = 0.90  # of the history's slope, by resampling
 MIN_RUNS = 10  # a run of neighbouring rows is at most this share of the history: a resample is never the history itself
+REACH = 0.99  # the share of history rows whose nearest-neighbour distance sets how far a combination of inputs may lie
+BEYOND_SHARE = 0.10  # a combination is beyond where more than this share of the periods ahead lie past the reach
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
 STILL = 0.10  # a shift under this share of what the history's regression leaves of the column (its residual spread) counts as none
 MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
@@ -163,17 +165,22 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
 
 
 def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
-    """Whether a row of `ahead` (periods, inputs), a combination of
-    several inputs, lies farther from every row of `past` (rows,
-    inputs) than the loneliest past row lies from its own nearest
-    neighbour, each input scaled by its spread in the past: the range
-    check per input does not see a combination the history never held
-    (a promotion and a holiday that never fell together, a price never
-    cut while the promotion was on). The reach is the history's own,
-    with no number to choose: where every combination of switches has
-    a duplicate it is zero and an unseen one is beyond; where the
-    history is sparse everywhere, near is as near as it gets. Rows
-    with a gap are left out."""
+    """Whether the rows of `ahead` (periods, inputs), a combination of
+    several inputs, lie farther from every row of `past` (rows,
+    inputs) than past rows lie from their own nearest neighbour, each
+    input scaled by its spread in the past: the range check per input
+    does not see a combination the history never held (a promotion and
+    a holiday that never fell together, a price never cut while the
+    promotion was on). The reach is the distance within which 99 of
+    100 history rows find a neighbour (`REACH`): the loneliest row
+    alone set it before, so one mis-keyed row disarmed the check. A
+    combination is beyond where more than a tenth of the periods ahead
+    lie past the reach (`BEYOND_SHARE`): one odd period among thirteen
+    does not fire it, two do; a plan drawn from the history itself
+    fires it on well under one in a hundred. Where every combination
+    of switches has a duplicate the reach is zero and an unseen one is
+    beyond; where the history is sparse everywhere, near is as near as
+    it gets. Rows with a gap are left out."""
     past = past[~np.isnan(past).any(axis=1)]
     ahead = ahead[~np.isnan(ahead).any(axis=1)]
     if len(past) < 2 or not len(ahead):
@@ -191,8 +198,8 @@ def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
             out[lo : lo + 256] = np.sqrt(d2.min(axis=1))
         return out
 
-    reach = float(nearest(p, True).max())
-    return bool((nearest(a, False) > reach).any())
+    reach = float(np.quantile(nearest(p, True), REACH))
+    return bool(np.mean(nearest(a, False) > reach) > BEYOND_SHARE)
 
 
 def spread(y: np.ndarray) -> float:
@@ -405,5 +412,6 @@ def assumptions() -> list[dict]:
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
         {"field": "basis", "value": EXTRA_ROWS, "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, and every input): with two inputs 16 rows on a monthly or weekly table, 22 on a daily, 45 on an hourly; fewer is said as too short"},
         {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate, from the history drawn again 300 times in runs of neighbouring rows (a day's rows on a table finer than daily, 14 rows on a daily one, 8 on a weekly, 3 on a monthly, and never more than a tenth of the history, so that there are at least ten runs to draw from); a range between two estimates has no stated coverage"},
-        {"field": "basis", "value": "the farthest any history row lies from its nearest neighbour", "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where no history row lies nearer to it than that, each input scaled by its spread in the history"},
+        {"field": "basis", "value": REACH, "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where it lies farther from every history row than the distance within which this share of history rows find a nearest neighbour, each input scaled by its spread in the history (before 2026-10-17 the loneliest row set the reach, and one mis-keyed row disarmed the check)"},
+        {"field": "basis", "value": BEYOND_SHARE, "basis": "assumed: the plan or the change goes beyond together where more than this share of the periods ahead lie past the reach: one odd period among thirteen does not say so, two do"},
     ]
