@@ -25,7 +25,9 @@ Decided on 2026-10-01:
   moved the column, declared on every answer.
 - **The size as a guess between two estimates.** The model's shift
   and the history's own estimate are both returned. The model errs
-  low more often than high.
+  low more often than high; on a lever that rarely moved in the
+  history it barely moves at all, and the history's estimate is the
+  one to read (against a truth, below).
 - **The error, measured on the caller's own table.** The last periods
   of the history are held back, predicted and compared: the error of
   the level, one window. Beside it, what the history leaves of the
@@ -325,6 +327,40 @@ moves anyway, as it does there with one input. The German market's
 two forecasts show an effect each and none together, their estimates
 pulling apart, and the route states no sign: the right answer to a
 pair that cancels.
+
+## Against a truth
+
+Everything above scores the sign against the history's own straight
+line, which the model also reads. On 2026-10-17 it was scored against
+what a change really did, on the Causal Chambers wind tunnel (Gamella,
+Peters and Bühlmann, Nature Machine Intelligence 2025): a real device
+whose actuators are set by protocol and whose causal graph is
+published, the intake fan's load driving its speed, its current and
+the pressures inside the tunnel, the outlet fan's load its own speed
+and current, neither touching the ambient pressure or the speaker's
+signals (Method 12 of `../glosstheval/docs/evaluation.md`, GK-60;
+record `scorecards/experiments/2026-10-17-chambers-e2cd971.json`).
+Ten runs where the intake load alone steps between four values and
+sixteen where every actuator walks at random, 104 members with a week
+per row by convention, the load moved by the suite's own rule.
+
+- **Every sign stated was right:** 233 of 233, on the fan speeds, the
+  currents and the two pressures inside the tunnel, under both loads.
+- **What the lever cannot touch answered `0` or `?` on 335 of 344;**
+  a sign on 9 (2.6%), under the 10% the rule's two 90% intervals
+  allow. This is the false-positive line against a truth.
+- **A sign was stated where there is an effect** on 75 to 100% of the
+  walks' answers, and on 17 to 75% of the changepoint runs', where the
+  load took four values and stepped nine times in 2,100 rows: there
+  the model's shift was a median 0.3% of the true change on the fan's
+  speed, 1 to 2% on the pressures, 22% on the current, while the
+  history's regression had 79 to 89% of it, and most answers said the
+  two disagree. On a lever that rarely moved, the model does not move
+  it; a list price that changed four times in four years is that case.
+- **The device is not a business,** and the fan has a threshold near a
+  load of 0.15 that a straight line averages over; the business tables
+  above are where the agreement is measured, this is where the sign is
+  judged.
 
 ## Where the history's interval is weak
 

@@ -29,9 +29,12 @@ Every member is read on its own, and every target on its own.
   assumption, declared on every answer (`assumptions`).
 
 The route promises that direction and no size. The model's shift
-and the history's estimate are both returned; the size lies
-somewhere between them, and the model errs low more often than
-high."""
+and the history's estimate are both returned; the model errs low
+more often than high, and on a lever that rarely moved in the
+history it barely moves at all, so the history's estimate is the one
+to read there (against a physical truth, docs/whatif.md). Against
+that truth every sign stated was right and 3% of what the lever
+cannot touch got one (2026-10-17)."""
 
 from __future__ import annotations
 

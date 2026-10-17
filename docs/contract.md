@@ -177,7 +177,10 @@ own. The route promises a direction, not a size:
   that nothing which set the input also moved the column is the
   caller's assumption, declared in `assumptions`. No table records
   what would have happened under an input that was not changed, so
-  this agreement is the evidence there is. On 3,737 tested series-instances where
+  this agreement is the evidence there is, with one exception: on a
+  real device whose causal graph is known (a wind tunnel, 2026-10-17),
+  every sign stated was right and 3% of the sensors the lever cannot
+  touch got one (`docs/whatif.md`, against a truth). On 3,737 tested series-instances where
   the history showed an effect, the model agreed with its direction
   on 94%; on a source judged only after the rule was fixed, on 87
   to 100%.
