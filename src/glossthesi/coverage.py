@@ -88,6 +88,23 @@ HELD = {
 }
 
 
+# Per grain, what the shares rest on: the datasets pooled, the histories behind the origins, and what the table does
+# not carry (docs/forecast.md, GK-46, GK-48; the evaluation's results page holds the error bars per step).
+MEASURED_ON = {
+    "month": "measured: pooled over 4 held-out datasets, 69 monthly series (a headcount, product reviews, clinical trials), two years of history behind every origin; a share carries a clustered standard error of 0.05 to 0.09 that the table does not yet hold, and no step reaches 0.80 (GK-46)",
+    "week": "measured: pooled over 2 held-out datasets, 80 weekly series (a fashion retailer, a grocery), two years of history behind every origin; a share carries a clustered standard error of 0.01 to 0.02 (GK-46)",
+    "day": "measured: pooled over 3 held-out datasets, 87 daily series (cash machines, a grocery delivery's warehouses, a grocery), a year of history behind every origin; standard error 0.02 to 0.04; the month's total at a dependence fitted on the same data (GK-46, GK-48)",
+    "quarter": "measured: pooled over 4 held-out datasets, 96 quarterly series (two tourism sets with 80 of the series, clinical trials), two years of history behind every origin; standard error 0.01 to 0.02; the year's total at a dependence fitted on the same data (GK-46, GK-48)",
+}
+
+
+def basis(grain: str) -> dict:
+    """What the served shares rest on, for the answer's `assumptions`: the datasets they pool, the histories behind
+    them, and the error the table does not carry. A caller whose series are shorter, mostly zero or unlike these
+    datasets reads the shares as a default, not as its own."""
+    return {"field": "coverage", "grain": grain, "basis": MEASURED_ON[grain]}
+
+
 def held(grain: str, horizon: int, spans: list[int], levels: list[float]) -> list[dict]:
     """The `coverage` entries of an answer: per step up to `horizon`
     and per span in `spans`, for each band in `BANDS` whose two levels

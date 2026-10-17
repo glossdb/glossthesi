@@ -157,22 +157,24 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     assert 0.4 * 3**0.5 < high - median < 0.4 * 3
     assert all(row["step"] == 3 for row in _rows(got, member="a", span=3))
     without = client.send("/forecast", SPEC | {"totals": []}, _table(a=HISTORY)).json()
-    assert _rows(without, span=3) == [] and "assumptions" not in without["answer"]
+    assert _rows(without, span=3) == [] and without["answer"]["assumptions"] == [coverage.basis("month")]  # the table's basis rides with the table
     # Weekly periods are taken as less dependent than monthly ones: the total's interval is narrower.
     weekly = client.send("/forecast", SPEC | {"grain": "week"}, _table(a=HISTORY)).json()
     values = [row["value"] for row in _rows(weekly, span=3)]
     assert values[1] == pytest.approx(25.5) and values[2] - values[1] < high - median
     # A total's answer declares the dependence it rests on and where it comes from.
-    assert got["answer"]["assumptions"] == [{"field": "totals", "grain": "month", "dependence": forecast.DEPENDENCE["month"], "basis": forecast.dependence("month")["basis"]}]
-    assert weekly["answer"]["assumptions"][0]["dependence"] == forecast.DEPENDENCE["week"] and weekly["answer"]["assumptions"][0]["basis"].startswith("measured")
+    # What the answer rests on: the coverage table's basis first, then the total's band width, each naming its grain.
+    assert got["answer"]["assumptions"] == [coverage.basis("month"), {"field": "totals", "grain": "month", "dependence": forecast.DEPENDENCE["month"], "basis": forecast.dependence("month")["basis"]}]
+    assert weekly["answer"]["assumptions"][1]["dependence"] == forecast.DEPENDENCE["week"] and weekly["answer"]["assumptions"][1]["basis"].startswith("fitted")
+    assert weekly["answer"]["assumptions"][0] == coverage.basis("week") and "held-out" in coverage.basis("week")["basis"]
     # Days and quarters have a value of their own, measured on held-out data, there being no other daily or
     # quarterly data, and the basis says so; a day's total is the narrowest of all.
     daily = client.send("/forecast", SPEC | {"grain": "day"}, _table(a=HISTORY)).json()
     quarterly = client.send("/forecast", SPEC | {"grain": "quarter"}, _table(a=HISTORY)).json()
     for grain, by_grain in (("day", daily), ("quarter", quarterly)):
-        said = by_grain["answer"]["assumptions"][0]
+        said = by_grain["answer"]["assumptions"][1]
         assert said["grain"] == grain and said["dependence"] == forecast.DEPENDENCE[grain]
-        assert said["basis"].startswith("measured") and "held-out" in said["basis"]
+        assert said["basis"].startswith("fitted") and "held-out" in said["basis"]
     narrowest = [row["value"] for row in _rows(daily, span=3)]
     assert narrowest[1] == pytest.approx(25.5) and narrowest[2] - narrowest[1] < values[2] - values[1]
 
@@ -231,7 +233,7 @@ def test_the_arrow_encoding_answers_the_same_as_json(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith(wire.ARROW), r.text
     back = pa.ipc.open_stream(r.content).read_all()
     answer = json.loads(back.schema.metadata[b"answer"])
-    assert answer == {"service": "glossthesi", "version": "dev", "errors": [], "coverage": coverage.held("month", 3, [3], SPEC["levels"]), "assumptions": [forecast.dependence("month")]}
+    assert answer == {"service": "glossthesi", "version": "dev", "errors": [], "coverage": coverage.held("month", 3, [3], SPEC["levels"]), "assumptions": [coverage.basis("month"), forecast.dependence("month")]}
     assert back.schema.field("origin").type == pa.int64() and back.schema.field("period").type == pa.int64()
     listed = {name: back.column(name).to_pylist() for name in back.column_names}
     as_json = client.send("/forecast", SPEC, table).json()
@@ -383,11 +385,15 @@ def test_forecast_refusals(client):
     base = _table(a=HISTORY)
     for change, word in (
         ({"targets": []}, "targets"), ({"targets": ["z"]}, "no value column"), ({"targets": ["y", "y"]}, "twice"), ({"horizon": 0}, "horizon"), ({"horizon": 2.5}, "horizon"),
-        ({"levels": [1.0]}, "levels"), ({"totals": [4]}, "totals"), ({"grain": "fortnight"}, "grain"), ({"width": 0}, "width"), ({"width": "wide"}, "width"),
+        ({"levels": [1.0]}, "levels"), ({"levels": [0.005, 0.5]}, "the model's own grid"), ({"totals": [4]}, "totals"), ({"grain": "fortnight"}, "grain"), ({"width": 0}, "width"), ({"width": "wide"}, "width"),
         ({"width": [1, None, 1]}, "width"), ({"origins": 0}, "origins"), ({"origins": []}, "origins"),
     ):  # fmt: skip
         r = client.send("/forecast", SPEC | change, base)
         assert r.status_code == 400 and word in r.json()["error"], (change, r.text)
+        # A specification refused names the field at fault, for an agent to repair.
+        assert [e["field"] for e in r.json()["errors"]] == [next(iter(change))] and r.json()["errors"][0]["error"] == r.json()["error"]
+    # The model's own grid runs from 0.01 to 0.99: a level at its edge is answered, one outside is refused rather than clamped.
+    assert client.send("/forecast", SPEC | {"levels": [0.01, 0.5, 0.99]}, base).status_code == 200
     for table, word in (
         ({"period": PERIODS[:8], "y": HISTORY}, "`member`"), ({"member": ["a"] * 8, "y": HISTORY}, "`period`"),
         ({"member": ["a"] * 8, "period": [1, 1, 2, 3, 4, 5, 6, 7], "y": HISTORY}, "two rows of period 1"),
@@ -602,6 +608,7 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     answer = r.json()
     assert answer["answer"]["errors"] == [] and answer["answer"]["changed"] == ["x"]
     assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low"}
+    assert any(a["value"] == "no confounding" for a in answer["answer"]["assumptions"])  # the caller's assumption, said on every answer
     # Three kinds of rows per member and period, each at the levels asked: held back, as planned, under the scenario.
     assert len(_rows(answer, member="a")) == 3 * 4 * 3
     held = _rows(answer, member="a", status="held_back", level=0.5)

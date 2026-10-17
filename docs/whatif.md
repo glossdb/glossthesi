@@ -16,8 +16,12 @@ Decided on 2026-10-01:
 ## What the route promises
 
 - **A direction, not a size.** The sign is stated where two estimates
-  agree: the member's own history shows the input moving the column,
-  and the model moves it the same way.
+  agree: the member's own history shows the column higher where the
+  input was higher, the calendar and the other inputs held, and the
+  model moves it the same way. It is an association in that history,
+  read for the same period; whether the input caused it rests on the
+  caller's assumption that nothing which set the input also moved the
+  column, declared on every answer.
 - **The size as a guess between two estimates.** The model's shift
   and the history's own estimate are both returned. The model errs
   low more often than high.
@@ -28,7 +32,17 @@ Decided on 2026-10-01:
 
 No table records what would have happened under an input that was
 not changed. So the direction cannot be scored against a truth; the
-agreement of the two estimates is the evidence there is.
+agreement of the two estimates is the evidence there is, and it is
+one piece of evidence, not two. The model reads the same rows with
+the same features as the regression (the calendar's cycles and the
+inputs; TabICL's forecaster holds no lagged target), so their
+agreement says the association holds under a linear and under a
+flexible fit. A lever set by something that also moved the column (a
+promotion scheduled when demand was expected high) gets a confident
+sign from both, and the wrong one where the lever's own effect goes
+the other way; on synthetic series with such a lever the review of
+2026-10-17 showed it on every series. Evidence of another kind is
+listed under what could come next.
 
 ## How it works
 
@@ -74,6 +88,15 @@ moved with that input in the history.
   one dependent column. Fifteen features, each computable from a
   caller's table beforehand. Each source was left out in turn.
 
+Two limits of this evidence, to read before the table. The yardstick
+is the history's straight line, itself an estimate, read on the same
+rows the model reads; "agrees on 94%" is agreement with it, not with a
+truth, and a model indifferent to the input would agree on about half.
+And the instances are not independent: one series gives several, and
+one source (Rossmann, 152 stores) gives most of the instances where
+the history shows an effect, so counts of instances overstate the
+evidence.
+
 | Question | Finding |
 |---|---|
 | Does the model invent effects? | No. Where the history shows nothing (17,179 instances) its shift is under a tenth of the column's spread on 91% |
@@ -87,11 +110,6 @@ moved with that input in the history.
 The size depends on the source more than on any feature found: good
 on 83% of Rossmann's instances, 55% of the electricity prices', 45%
 of Favorita's, 38% of Rohlik's, and 6 to 30% on the rest.
-
-Two limits of this evidence. The yardstick is the history's straight
-line, itself an estimate; "agrees on 94%" is agreement with it, not
-with a truth. And the instances are not independent: one series
-gives several, so counts of instances overstate the evidence.
 
 ## The evaluation that runs today
 
@@ -186,8 +204,12 @@ Two things make the multi-lever answer as safe to read as the
 single one (on Philipp's word, the same day). The answer object
 carries `parts`: per member, column and changed input, what that
 lever alone does over the periods ahead with its interval, from the
-same regression, so the parts add up to the joint estimate and a
-user sees which lever carries the effect and when two cancel. And
+same regression, so the parts' estimates add up to the joint
+estimate (their intervals do not: the joint interval is the one to
+read) and a user sees which lever carries the effect and when two
+cancel. The single and the joint reading are one regression, so that
+the parts equal the single readings is a property of the code, kept
+by a test, not a finding. And
 several changed inputs are checked together: each may lie inside its
 own range while the history never held the combination (a promotion
 and a holiday that never fell together); where no row of the history
@@ -208,7 +230,9 @@ named (80 series and columns; GK-50 in the evaluation's findings):
 where the history's joint estimate is off zero on both readings (65),
 the model moves the column that way on 98%, its shift 1.06 of the
 history's estimate at the median and within half to one and a half
-times on 89%; Rossmann's promotion with school holiday 1.06 on sales
+times on 89% (the history's joint estimate is the sum of the parts by
+construction, so this is consistency with additivity, not a
+validation of the size); Rossmann's promotion with school holiday 1.06 on sales
 and 1.04 on customers with the direction on every store. Where the
 history shows nothing of the pair (15, the energy tables) the model
 moves anyway, as it does there with one input. The German market's
@@ -224,6 +248,17 @@ with it; an interaction between two changed inputs.
 
 ## What could come next
 
+- **Evidence of another kind for the direction** (the plan of
+  2026-10-17, step 4): a placebo on the lead of the input (a lever
+  that predicts the column before it is applied signals anticipation
+  or a common cause), a step check at past changes of the lever (the
+  forecaster run with the lever held, against what happened),
+  negative-control columns the lever cannot touch, a permuted lever
+  as the chance line, decreases beside increases; then data with a
+  truth.
+- **One lag of the input in the history's reading** (step 3): the
+  same-period slope misses a dip after a promotion and a price's
+  carry-over, and can state the sign of a sustained change wrong.
 - **Trial data** as the history for a what-if.
 - **A model trained on interventions.** CausalLongPFN (Zare et al.,
   arXiv 2606.05797, 2026) takes a history and a planned future input,

@@ -48,7 +48,9 @@ GROUP = 100  # series forecast together, at most: the size the model's published
 MIN_HISTORY = 6  # known values a series needs
 MAX_HORIZON = 1024
 # Between the periods of a span, per grain: the value at which the total's 80% interval covers 0.80 of
-# the actual totals. Months and weeks on the development backtests, quarter and year pooled, with a
+# the actual totals. The combination is the sum of equicorrelated normals, so the value reads as a
+# correlation; it is fitted to the coverage and so takes up whatever bias the medians carry, and per
+# dataset it runs from 0.0 to 1.0 (GK-45): a width for the band, not a measured dependence of the errors. Months and weeks on the development backtests, quarter and year pooled, with a
 # bootstrap standard error of 0.02 and 0.04 (`docs/forecast.md`, GK-45). Days and quarters on the held-out
 # backtests of the coverage table, the calendar month's and the year's totals, standard error 0.01 and
 # 0.06: there is no other daily or quarterly data, so each dataset was also read at the value the others
@@ -56,8 +58,8 @@ MAX_HORIZON = 1024
 DEPENDENCE = {"month": 0.43, "week": 0.22, "day": 0.12, "quarter": 0.25}
 GRAINS = tuple(DEPENDENCE)
 _BASIS = {
-    **dict.fromkeys(("month", "week"), "measured: the value at which the total's 80% interval covers 0.80 on the development backtests (GK-45)"),
-    **{g: f"measured: the value at which the total's 80% interval covers 0.80 on the held-out {w} backtests, the only {w} data; checked by leaving one dataset out (GK-48)" for g, w in (("day", "daily"), ("quarter", "quarterly"))},
+    **dict.fromkeys(("month", "week"), "fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the development backtests (GK-45): a width for the band, written as a correlation, not a measured dependence between the periods' errors; per dataset it runs from 0.0 to 1.0"),
+    **{g: f"fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the held-out {w} backtests, the only {w} data, checked by leaving one dataset out (GK-48): a width for the band, written as a correlation, not a measured dependence between the periods' errors" for g, w in (("day", "daily"), ("quarter", "quarterly"))},
 }
 # The model's own quantile levels: what it was trained to answer, and the grid a PIT is read against.
 GRID = (0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99)

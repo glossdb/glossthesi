@@ -46,6 +46,26 @@ def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
     assert whatif.run_of_rows(whatif.minutes(stamps)) == 14
 
 
+def test_a_reading_that_holds_on_the_rows_alone_is_said_as_such_and_an_unchanged_input_as_unchanged():
+    # A column that drifts on its own beside a drifting input: the rows show a slope, the changes do not; the basis says so
+    # and keeps "no effect" (the sign rule is the conjunction), where before it said the history showed nothing at all.
+    rng = np.random.default_rng(5)
+    stamps = _weekly(periods=240)[0]
+    x = np.cumsum(rng.normal(0, 0.1, 240)) + 0.01 * np.arange(240)
+    drifts = 20.0 + np.cumsum(rng.normal(0, 0.3, 240))
+    starts = whatif.places(rng)
+    m = whatif.Member("a", stamps[:-13], stamps[-13:], {"y": drifts[:-13]}, {"x": x[:-13]}, {"x": x[-13:]}, {"x": np.minimum(x[-13:] + 0.2, x[:-13].max())})
+    plan = np.full(13, 20.0)
+    got = whatif.reading(m, "y", "x", plan, plan, plan, starts)
+    assert got["sign"] in "0?" and "no effect" in got["basis"] and "both readings" in got["basis"] and "disagree" not in got["basis"]
+    # An input the same as planned and under the scenario for this member is `=`, unchanged: not "no effect visible".
+    same = whatif.reading(m, "y", "x", plan, plan, plan, starts) if False else whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
+    assert same["sign"] == "=" and whatif.CONFIDENCE["="] == "unchanged" and "same as planned" in same["basis"]
+    # Every threshold the reading uses is declared on the answer.
+    declared = {a["value"] for a in whatif.assumptions() if not isinstance(a["value"], str)}
+    assert {whatif.INTERVAL, whatif.STILL, whatif.SEPARABLE, whatif.MOSTLY_EMPTY, whatif.TIED, whatif.EXTRA_ROWS} <= declared
+
+
 def test_a_drift_two_columns_merely_share_does_not_show_in_the_changes():
     # Found on real tables: promotions "moved" the world's oil price, because both drifted over the same years.
     rng = np.random.default_rng(5)
