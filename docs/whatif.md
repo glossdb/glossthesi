@@ -26,7 +26,11 @@ Decided on 2026-10-01:
   and the history's own estimate are both returned. The model errs
   low more often than high.
 - **The error, measured on the caller's own table.** The last periods
-  of the history are held back, predicted and compared.
+  of the history are held back, predicted and compared: the error of
+  the level, one window. Beside it, what the history leaves of the
+  column once the level, the trend, the calendar and the inputs are
+  held: the spread the history's estimate of the change is read
+  against (`history_error`).
 - **"No effect visible" is not "no effect".** It says that this
   member's data does not show one.
 

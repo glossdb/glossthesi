@@ -86,6 +86,13 @@ def design(stamps: np.ndarray, inputs: np.ndarray) -> np.ndarray:
     return np.column_stack([*held, inputs])
 
 
+def rows_needed(stamps: np.ndarray, inputs: int) -> int:
+    """The actual periods a member needs behind a prediction: `MIN_HISTORY`, or the columns the history's reading
+    holds plus `EXTRA_ROWS` where that is more — 16 with two inputs on a monthly or weekly table, 22 on a daily, 45 on
+    an hourly — so that the door says so instead of the reading answering "too short"."""
+    return max(MIN_HISTORY, design(stamps, np.zeros((len(stamps), inputs))).shape[1] + EXTRA_ROWS)
+
+
 def places(rng: np.random.Generator) -> np.ndarray:
     """Where each run of rows starts when the history is drawn again, as a share of the history: the same for every series read with it."""
     return rng.uniform(size=(RESAMPLES, CONTEXT))
@@ -256,7 +263,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     deltas = {c: member.scenario[c] - member.plan[c] for c in changed}
     shift = float(np.nanmean(scenario - plan))
     out = {
-        "sign": "?", "basis": "", "explains": np.nan, "parts": [],
+        "sign": "?", "basis": "", "explains": np.nan, "parts": [], "history_error": np.nan,
         "error": float(np.nanmean(np.abs(held_back - y[-h:]))) if (~np.isnan(y[-h:])).any() else np.nan,
         "history_value": np.full(h, np.nan), "history_low": np.full(h, np.nan), "history_high": np.full(h, np.nan),
     }  # fmt: skip
@@ -304,6 +311,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         if beyond_together(past, np.column_stack([member.scenario[c] for c in changed])):
             return say("the change goes beyond what the history holds for the inputs together: no row of the history lies near their combination")
     read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts, together=None if one else at)
+    out["history_error"] = float(read["residual_sd"])  # what the history leaves of the column: the error its estimate is read against
     for c, j in zip(changed, at):
         if not np.isfinite(read["slope"][j]) or not np.isfinite(read["slope_on_changes"][j]):
             return say("the history is too short to read how the column moved with the input" + ("" if one else f" `{c}`"))

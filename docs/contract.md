@@ -194,9 +194,13 @@ encoding, text such as `2026-07-06`), since the forecaster builds
 the calendar from it. A timestamp with a time zone is read in UTC:
 the weekday and the hour the history's reading holds are UTC's. A
 member has one row per period and status.
-A member needs 26 actual periods behind a prediction, so 26 more
-than there are periods ahead; its last 4,096 are read. A target's
-values in the rows ahead are ignored.
+A member needs, behind the periods ahead, 26 actual periods or as
+many as the history's reading holds columns plus eight, whichever is
+more: with two inputs 26 on a monthly or weekly table, 26 on a daily
+one, 45 on an hourly one (the level, the trend, the year's cycle, the
+weekday, the hour and every input); a member with fewer fails alone and
+the error names the number. Its last 4,096 are read. A target's values
+in the rows ahead are ignored.
 
 An input is a number; a yes-or-no column is read as 1 and 0, and a
 text column as whether there is an entry (a holiday's name).
@@ -264,7 +268,8 @@ And per member and column, the same on each of its rows:
 | `confidence` | The sign in words: `direction`, `no effect visible`, `not answerable`, `unchanged`. |
 | `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing, or shows an effect on one reading only (the rows, or their changes from row to row), and the model moves the column; the history's estimate of the change points both ways over the periods ahead (a change that reverses, or two levers moving in different periods), so no one direction holds for them all. |
 | `explains` | The share of the column the changed input explains in this member's history, the other inputs and the calendar held; the inputs together, where several are changed. |
-| `error` | The mean distance of the held-back median from what was recorded, in the column's own units. |
+| `error` | The error of the level: the mean distance of the held-back median from what was recorded over the periods held back, in the column's own units. It is one window; it says how far the model's level was off, not how far the change is. The held-back rows carry the quantiles and the actual, so a caller counts how many of them fell inside a band. |
+| `history_error` | What the history leaves of the column: the spread of what remains once the level, the trend, the calendar's cycles and the inputs are held, in the column's own units. The history's estimate of the change (`history_value`) is read against it, and a tenth of it is the `0` sign's threshold. Null where the history was not read. |
 
 `no effect visible` means that this member's data does not show
 one, not that there is none.
