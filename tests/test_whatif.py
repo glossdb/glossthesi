@@ -89,20 +89,21 @@ def test_a_change_that_points_both_ways_over_the_periods_ahead_is_said_so_and_is
 
 
 def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_spread():
-    # A column climbing from 100 to 1,000 with a residual spread of 10 and an input it does not answer: the whole spread
-    # is 260, so a model shift of 25 (2.5 residual spreads) passed as "still" before; now it is a move.
+    # A column climbing from 400 to 700 (less than doubling, so read on amounts) with a residual spread of 10 and an
+    # input it does not answer: the whole spread is about 87, so a model shift of 7 passed as "still" before; now it is
+    # a move, being most of a residual spread.
     rng = np.random.default_rng(11)
     stamps = _weekly(periods=200)[0]
     x = rng.uniform(0, 1, 200)
-    y = np.linspace(100, 1000, 200) + rng.normal(0, 10, 200)
+    y = np.linspace(400, 700, 200) + rng.normal(0, 10, 200)
     starts = whatif.places(rng)
     read = whatif.history(stamps, y, np.column_stack([x]), starts)
-    assert 7 < read["residual_sd"] < 13 and whatif.spread(y) > 200
+    assert 7 < read["residual_sd"] < 13 and whatif.spread(y) > 70
     m = _member(stamps, y, {"x": x}, "x")
-    plan = np.full(13, 1000.0)
-    moved = whatif.reading(m, "y", "x", plan, plan, plan + 25.0, starts)
+    plan = np.full(13, 700.0)
+    moved = whatif.reading(m, "y", "x", plan, plan, plan + 7.0, starts)
     still = whatif.reading(m, "y", "x", plan, plan, plan + 0.5, starts)
-    assert moved["sign"] == "?" and moved["basis"].endswith("and the model moves it")
+    assert moved["sign"] == "?" and moved["basis"].endswith("and the model moves it") and "logarithm" not in moved["basis"]
     assert still["sign"] == "0" and "what the history leaves" in still["basis"]
 
 
@@ -278,3 +279,40 @@ def test_one_lag_of_the_changed_input_is_held_and_what_the_period_after_says_is_
     assert whatif.rows_needed(stamps_w, 2) == whatif.MIN_HISTORY and whatif.rows_needed(stamps_w, 2, 2) == whatif.MIN_HISTORY
     hourly = (np.datetime64("2021-01-04") + np.arange(60) * np.timedelta64(1, "h")).astype("datetime64[ms]")
     assert whatif.rows_needed(hourly, 2, 0) == 45 and whatif.rows_needed(hourly, 2, 2) == 48
+
+
+def test_a_column_that_grew_is_read_on_its_logarithm_and_the_slopes_are_translated_at_the_plans_level():
+    # A weekly column that triples over its history, x raising it by 20% of its level: on amounts the slope is one
+    # number for an early level and a late one; on the logarithm it is the share, and the estimate ahead is the
+    # plan's level times it.
+    rng = np.random.default_rng(7)
+    n = 160
+    stamps = (np.datetime64("2019-01-06") + np.arange(n) * np.timedelta64(7, "D")).astype("datetime64[ms]")
+    x = (rng.uniform(size=n) < 0.5).astype(float)
+    y = 100.0 * np.exp(np.log(3.0) * np.arange(n) / n + np.log(1.2) * x + rng.normal(0, 0.03, n))
+    starts = whatif.places(np.random.default_rng(1))
+    cut = n - 13
+    m = whatif.Member("a", stamps[:cut], stamps[cut:], {"y": y[:cut]}, {"x": x[:cut]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
+    plan = np.full(13, 300.0)
+    got = whatif.reading(m, "y", "x", plan, plan, plan * 1.2, starts)
+    assert got["sign"] == "+" and "read on the column's logarithm" in got["basis"] and "-fold with the calendar held" in got["basis"]
+    assert 2.5 < whatif.growth(stamps[:cut], y[:cut]) < 3.5
+    # Under two years of history the trend is not told from the year's cycle: read on amounts, whatever it did.
+    assert whatif.growth(stamps[:100], y[:100]) == 1.0
+    short = whatif.Member("a", stamps[:100], stamps[100:113], {"y": y[:100]}, {"x": x[:100]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
+    assert "logarithm" not in whatif.reading(short, "y", "x", plan, plan, plan * 1.2, starts)["basis"]
+    # The estimate is a fifth of the plan's level, within a few percent, and the parts add up to it.
+    assert np.allclose(got["history_value"] - plan, 300.0 * np.log(1.2), rtol=0.15)
+    assert np.isclose(got["parts"][0]["history_shift"], np.mean(got["history_value"] - plan))
+    assert got["history_error"] < 30.0  # a share of the level, in the column's units: around 3% of 300
+    # The same column read at a plan of 100 answers a third of the amount: the slope is a share.
+    low = whatif.reading(m, "y", "x", plan / 3, plan / 3, plan / 3 * 1.2, starts)
+    assert np.allclose(low["history_value"] - plan / 3, (got["history_value"] - plan) / 3, rtol=1e-6)
+    # A column that did not double is read on amounts, and so is one with a zero in it, whatever its growth.
+    flat = 100.0 + 20.0 * x + rng.normal(0, 3, n)
+    m2 = whatif.Member("a", stamps[:cut], stamps[cut:], {"y": flat[:cut]}, {"x": x[:cut]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
+    assert "logarithm" not in whatif.reading(m2, "y", "x", plan, plan, plan + 20.0, starts)["basis"]
+    with_zero = y.copy()
+    with_zero[5] = 0.0
+    m3 = whatif.Member("a", stamps[:cut], stamps[cut:], {"y": with_zero[:cut]}, {"x": x[:cut]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
+    assert "logarithm" not in whatif.reading(m3, "y", "x", plan, plan, plan * 1.2, starts)["basis"]

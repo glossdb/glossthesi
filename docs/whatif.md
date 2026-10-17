@@ -74,6 +74,15 @@ Every member is read on its own, and every target on its own
    or the column moves back then. Before 2026-10-17 the same-period
    slope stood alone, and could state the sign of a sustained change
    wrong where the period after undoes it.
+   A positive column whose fitted trend over a history of two years
+   or more, the calendar held, doubles it or halves it (`GROWTH`) is
+   read on its logarithm (under two years a trend and the year's
+   cycle are not told apart, so the column is read on amounts): what an input does
+   to a column that grew is a share of its level, not an amount, and
+   a straight line on amounts misreads it (its interval, in amounts
+   of an early level, is too narrow for the late ones). The slopes
+   are translated at the plan's level per period, and the reason says
+   so (since 2026-10-17).
    It is read twice, on the rows and on their changes from one row to
    the next; a drift two columns merely share shows only in the
    first. The history is drawn again 300 times in runs of
