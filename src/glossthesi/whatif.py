@@ -322,7 +322,8 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     # The history's estimate per period: the plan's median plus what the change made there does, by the slopes.
     out["history_value"] = plan + change @ slopes
     per_period = draws @ change.T  # (draws, periods)
-    out["history_low"], out["history_high"] = plan + np.nanquantile(per_period, ends[0], axis=0), plan + np.nanquantile(per_period, ends[1], axis=0)
+    low_p, high_p = np.nanquantile(per_period, ends[0], axis=0), np.nanquantile(per_period, ends[1], axis=0)
+    out["history_low"], out["history_high"] = plan + low_p, plan + high_p
     # What each changed input alone does, as the mean over the periods ahead, with its interval from the same draws:
     # the parts add up to the joint estimate, so a user combines the single-lever and the multi-lever readings.
     mean_change = np.nanmean(change, axis=0)  # per input
@@ -330,9 +331,15 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         {"input": c, "history_shift": float(slopes[j] * mean_change[j]), "history_low": float(np.nanquantile(draws[:, j] * mean_change[j], ends[0])), "history_high": float(np.nanquantile(draws[:, j] * mean_change[j], ends[1]))}
         for j, c in enumerate(changed)
     ]
+    what = "the input" if one else "the inputs together"
+    # A sign is for every period ahead or for none: where the history's estimate of the change is off zero upward in
+    # some periods and downward in others (two levers moving in different periods, a change that reverses), the mean
+    # could net to nothing or point one way while the periods say otherwise; the per-period numbers are served as they are.
+    up, down = int((low_p > 0).sum()), int((high_p < 0).sum())
+    if up and down:
+        return say(f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down), so no one direction holds for them all")
     # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
-    what = "the input" if one else "the inputs together"
     if shows:
         way = np.sign(slopes @ moved)
         if np.sign(shift) == way and way != 0:

@@ -61,6 +61,27 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
         assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
 
 
+def test_a_change_that_points_both_ways_over_the_periods_ahead_gets_no_one_sign():
+    # y answers x upward and z downward; the scenario raises x in the first four periods and z in the last nine. The
+    # mean of the history's estimate nets to about nothing, and read on the mean the answer was `0`, "no effect
+    # visible", while every period showed an effect. A sign is for every period or for none.
+    rng = np.random.default_rng(21)
+    stamps = _weekly(periods=160)[0]
+    x, z = rng.uniform(0, 1, 160), rng.uniform(0, 1, 160)
+    y = 50.0 + 2.0 * x - 0.9 * z + rng.normal(0, 0.3, 160)
+    starts = whatif.places(rng)
+    m = _member(stamps, y, {"x": x, "z": z}, "x")
+    m.scenario = {"x": m.plan["x"].copy(), "z": m.plan["z"].copy()}
+    m.scenario["x"][:4] = np.minimum(m.plan["x"][:4] + 0.3, x[:147].max())
+    m.scenario["z"][4:] = np.minimum(m.plan["z"][4:] + 0.3, z[:147].max())
+    plan = np.full(13, 50.0)
+    got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.01, starts)
+    assert got["sign"] == "?" and "points both ways" in got["basis"] and "4 up, 9 down" in got["basis"]
+    assert (got["history_value"][:4] > plan[:4]).all() and (got["history_value"][4:] < plan[4:]).all()
+    # One lever raised in every period keeps its sign, as before.
+    assert whatif.reading(_member(stamps, y, {"x": x, "z": z}, "x"), "y", "x", plan, plan, plan + 0.4, starts)["sign"] == "+"
+
+
 def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_spread():
     # A column climbing from 100 to 1,000 with a residual spread of 10 and an input it does not answer: the whole spread
     # is 260, so a model shift of 25 (2.5 residual spreads) passed as "still" before; now it is a move.
