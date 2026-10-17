@@ -37,6 +37,7 @@ import numpy as np
 
 RESAMPLES = 300
 INTERVAL = 0.90  # of the history's slope, by resampling
+MIN_RUNS = 10  # a run of neighbouring rows is at most this share of the history: a resample is never the history itself
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
 STILL = 0.10  # a shift under this share of the column's spread counts as none
 MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
@@ -60,7 +61,11 @@ def minutes(stamps: np.ndarray) -> float:
 def run_of_rows(grain: float) -> int:
     """How many neighbouring rows are drawn together when the history
     is drawn again: a day on a table finer than daily, two weeks on a
-    daily one, eight weeks on a weekly one, three months on a monthly."""
+    daily one, eight weeks on a weekly one, three months on a monthly.
+    On a short history the run is cut to a tenth of it (`MIN_RUNS`), so
+    that there are runs to draw: a run as long as the history gives the
+    history back 300 times, an interval of no width, and any slope off
+    zero (found 2026-10-17 on a 5-minute table of 200 rows)."""
     return int(round(24 * 60 / grain)) if grain < 24 * 60 else 14 if grain == 24 * 60 else 8 if grain <= 7 * 24 * 60 else 3
 
 
@@ -115,7 +120,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
         return out
 
     def rows(b: int, length: int) -> np.ndarray:
-        size = min(run, length)
+        size = max(1, min(run, length // MIN_RUNS))
         first = (starts[b, : -(-length // size)] * (length - size + 1)).astype(int)
         return (first[:, None] + np.arange(size)).ravel()[:length]
 
@@ -380,6 +385,6 @@ def assumptions() -> list[dict]:
         {"field": "basis", "value": TIED, "basis": "assumed: an input that is not told apart is said to follow another input by name where their correlation is at least this; else the other inputs and the calendar's cycles together"},
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
         {"field": "basis", "value": EXTRA_ROWS, "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, and every input): with two inputs 16 rows on a monthly or weekly table, 22 on a daily, 45 on an hourly; fewer is said as too short"},
-        {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate, from the history drawn again 300 times in runs of neighbouring rows (a day's rows on a table finer than daily, 14 rows on a daily one, 8 on a weekly, 3 on a monthly); a range between two estimates has no stated coverage"},
+        {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate, from the history drawn again 300 times in runs of neighbouring rows (a day's rows on a table finer than daily, 14 rows on a daily one, 8 on a weekly, 3 on a monthly, and never more than a tenth of the history, so that there are at least ten runs to draw from); a range between two estimates has no stated coverage"},
         {"field": "basis", "value": "the farthest any history row lies from its nearest neighbour", "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where no history row lies nearer to it than that, each input scaled by its spread in the history"},
     ]
