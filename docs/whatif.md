@@ -362,6 +362,25 @@ per row by convention, the load moved by the suite's own rule.
   above are where the agreement is measured, this is where the sign is
   judged.
 
+On the business tables the same two questions were asked without a
+truth, by refuters (Method 11, GK-61; record
+`scorecards/experiments/2026-10-17-refuters-af2df33.json`):
+
+- **The chance line:** with the lever's history shifted around the
+  member's rows, so that its own dependence stays and its alignment
+  with the column goes, a sign is stated on 8 of 219 answers, 3.7%
+  with a standard error of 0.9 clustered by table; 10% is the most the
+  rule's two 90% intervals allow.
+- **The false-positive line:** another member's column under this
+  member's lever gets a sign on 0 of 32 where the lever is the member's
+  own; where every member shares the lever (a chain's promotion, a
+  market's forecast, the weather) the other member's column answers it,
+  as it should, and that control says nothing.
+- A column of noise among the inputs leaves the sign on 116 of 117;
+  half the history keeps it on 104 of 117 and flips none; the mirrored
+  decrease flips it on 105 of 111 and loses 6 where the decrease meets
+  the history's floor.
+
 ## Where the history's interval is weak
 
 The 90% interval of the history's slope comes from the history drawn
