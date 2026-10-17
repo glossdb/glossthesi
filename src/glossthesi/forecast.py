@@ -58,8 +58,14 @@ MAX_HORIZON = 1024
 DEPENDENCE = {"month": 0.43, "week": 0.22, "day": 0.12, "quarter": 0.25}
 GRAINS = tuple(DEPENDENCE)
 _BASIS = {
-    **dict.fromkeys(("month", "week"), "fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the development backtests (GK-45): a width for the band, written as a correlation, not a measured dependence between the periods' errors; per dataset it runs from 0.0 to 1.0"),
-    **{g: f"fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the held-out {w} backtests, the only {w} data, checked by leaving one dataset out (GK-48): a width for the band, written as a correlation, not a measured dependence between the periods' errors" for g, w in (("day", "daily"), ("quarter", "quarterly"))},
+    **dict.fromkeys(
+        ("month", "week"),
+        "fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the development backtests (GK-45): a width for the band, written as a correlation, not a measured dependence between the periods' errors; per dataset it runs from 0.0 to 1.0",
+    ),
+    **{
+        g: f"fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the held-out {w} backtests, the only {w} data, checked by leaving one dataset out (GK-48): a width for the band, written as a correlation, not a measured dependence between the periods' errors"
+        for g, w in (("day", "daily"), ("quarter", "quarterly"))
+    },
 }
 # The model's own quantile levels: what it was trained to answer, and the grid a PIT is read against.
 GRID = (0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99)
@@ -98,7 +104,9 @@ class Series:
         for column, values in enumerate(np.atleast_2d(self.history)):
             known = int((~np.isnan(values)).sum())
             if known < MIN_HISTORY:
-                short[column] = ForecastError(f"{known} known values of {'column ' + str(column) + ' of the ' if self.columns > 1 else ''}history: a forecast needs {MIN_HISTORY}")
+                short[column] = ForecastError(
+                    f"{known} known values of {'column ' + str(column) + ' of the ' if self.columns > 1 else ''}history: a forecast needs {MIN_HISTORY}"
+                )
         if len(short) == self.columns:
             raise short[0] if self.columns == 1 else ForecastError(f"no column has {MIN_HISTORY} known values of history")
         for name, values in self.past.items():
@@ -214,7 +222,9 @@ class Chronos2:
                 self._pipeline = BaseChronosPipeline.from_pretrained(MODEL, revision=REVISION, device_map=self.device, torch_dtype=torch.float32)
             return self._pipeline
 
-    def forecast(self, series: list[Series], horizon: int, levels: list[float], spans: list[int] | None = None, grain: str = "month") -> list[list[dict | ForecastError] | ForecastError]:
+    def forecast(
+        self, series: list[Series], horizon: int, levels: list[float], spans: list[int] | None = None, grain: str = "month"
+    ) -> list[list[dict | ForecastError] | ForecastError]:
         """Per series, per column, its quantiles (horizon, levels) with
         the width applied, its totals per span, and `raw`: the model's
         own quantiles at the levels of `GRID` (horizon, GRID) before
@@ -240,7 +250,9 @@ class Chronos2:
                 for i in mine
             ]
             try:
-                answered, _mean = self.pipeline().predict_quantiles(inputs, prediction_length=horizon, quantile_levels=asked, batch_size=GROUP, cross_learning=True)
+                answered, _mean = self.pipeline().predict_quantiles(
+                    inputs, prediction_length=horizon, quantile_levels=asked, batch_size=GROUP, cross_learning=True
+                )
             except Exception as e:  # the package's own refusals, by their text: the series forecast with these fail, the others stand
                 if out_of_memory(e):
                     raise
@@ -258,7 +270,9 @@ class Chronos2:
                     median = path[:, middle]
                     raw = path[:, grid_at]
                     path = median[:, None] + width * (path - median[:, None])
-                    out[i].append({"quantiles": path[:, at], "raw": raw, "totals": {span: total[at] for span, total in totals(path, median, spans or [], grain).items()}})
+                    out[i].append(
+                        {"quantiles": path[:, at], "raw": raw, "totals": {span: total[at] for span, total in totals(path, median, spans or [], grain).items()}}
+                    )
         return out
 
 

@@ -35,7 +35,9 @@ def main() -> None:
         k.load_forecaster()
     telemetry.started(version=version, device=k.device, addr=addr, auth=auth, **wired)
     if auth == "insecure-open":
-        telemetry.log.warning("insecure_open", extra={"caller": app.INSECURE_DEV_MODE, "says": "GLOSSTHESI_INSECURE_OPEN: the doors are open, nobody is verified"})
+        telemetry.log.warning(
+            "insecure_open", extra={"caller": app.INSECURE_DEV_MODE, "says": "GLOSSTHESI_INSECURE_OPEN: the doors are open, nobody is verified"}
+        )
     config = uvicorn.Config("glossthesi.app:app", host=host or "127.0.0.1", port=int(port), log_config=None)
     _Server(config).run()
 

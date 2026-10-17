@@ -164,7 +164,7 @@ class Kernels:
             for i in everyone:
                 try:
                     done.update(read([i]))
-                except Exception as e:  # noqa: BLE001 — reported per job
+                except Exception as e:
                     if forecast.out_of_memory(e):
                         raise
                     done[i] = e
@@ -177,7 +177,9 @@ class Kernels:
                 from tabicl.forecast import TabICLForecaster, TimeSeriesDataFrame
                 from tabicl.forecast._dispatch import SeriesDispatcher
             except ImportError as e:
-                raise KernelError("the what-if needs TabICL's forecaster, and this build does not carry its packages: install `tabicl[forecast]` (pandas, statsmodels, matplotlib)") from e
+                raise KernelError(
+                    "the what-if needs TabICL's forecaster, and this build does not carry its packages: install `tabicl[forecast]` (pandas, statsmodels, matplotlib)"
+                ) from e
             kernel = self
 
             def infer(train_x, train_y, test_x, quantiles=None) -> dict:

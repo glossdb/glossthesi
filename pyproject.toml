@@ -41,6 +41,7 @@ glossthesi = "glossthesi.__main__:main"
 dev = [
     "pytest>=9",
     "httpx>=0.28",
+    "ruff>=0.17.1",
 ]
 
 [build-system]
@@ -52,3 +53,14 @@ packages = ["src/glossthesi"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 160
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "BLE", "RUF"]
+ignore = [
+    "E501",  # lines are long where a sentence is: the comments carry the reasoning
+    "B905",  # zip without strict: the arrays zipped are built together; a strict= on every one is noise
+]
