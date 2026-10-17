@@ -260,7 +260,7 @@ And per member and column, the same on each of its rows:
 
 | Column | Meaning |
 |---|---|
-| `sign` | `+` or `-`: the history shows the input, or the inputs together, moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of the column's spread. `=`: the changed inputs are the same as planned and under the scenario for this member, so nothing is asked of it. `?`: nothing can be said; `basis` says why, naming the input where one of several fails a check. |
+| `sign` | `+` or `-`: the history shows the input, or the inputs together, moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of what the history's regression leaves of the column (its residual spread). `=`: the changed inputs are the same as planned and under the scenario for this member, so nothing is asked of it. `?`: nothing can be said; `basis` says why, naming the input where one of several fails a check. |
 | `confidence` | The sign in words: `direction`, `no effect visible`, `not answerable`, `unchanged`. |
 | `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing, or shows an effect on one reading only (the rows, or their changes from row to row), and the model moves the column. |
 | `explains` | The share of the column the changed input explains in this member's history, the other inputs and the calendar held; the inputs together, where several are changed. |
@@ -282,7 +282,7 @@ of the history: six stores of 120 weeks with two targets take about
 twelve seconds on a laptop. The route needs the packages of TabICL's
 forecaster (`tabicl[forecast]`); a build without them refuses the
 read with a 422 that says so. The thresholds above (the 90% interval, a tenth of
-the spread, how far an input must stand apart) are in the answer's
+what the history leaves of the spread, how far an input must stand apart) are in the answer's
 `assumptions`, each with its basis.
 
 **The whole algorithm is here; the caller holds none of it.**

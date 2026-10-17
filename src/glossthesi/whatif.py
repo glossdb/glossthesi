@@ -39,7 +39,7 @@ RESAMPLES = 300
 INTERVAL = 0.90  # of the history's slope, by resampling
 MIN_RUNS = 10  # a run of neighbouring rows is at most this share of the history: a resample is never the history itself
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
-STILL = 0.10  # a shift under this share of the column's spread counts as none
+STILL = 0.10  # a shift under this share of what the history's regression leaves of the column (its residual spread) counts as none
 MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
 CONTEXT = 4096  # the past periods TabICL's forecaster reads at most
 MIN_HISTORY = 26  # the rows a member needs behind a prediction
@@ -109,7 +109,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
     k = inputs.shape[1]
     slopes, draws, free, explains = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.zeros(k), np.full(k, np.nan)
     slopes_c, draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
-    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan}
+    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan, "residual_sd": np.nan}
     full = design(stamps, inputs)
     held = full.shape[1] - k
     keep = ~np.isnan(y) & ~np.isnan(full).any(axis=1)
@@ -126,6 +126,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
 
     coef = np.linalg.lstsq(x, seen, rcond=None)[0]
     left = np.sum((seen - x @ coef) ** 2)
+    out["residual_sd"] = float(np.sqrt(left / max(len(seen) - x.shape[1], 1)))  # what the level, trend, cycles and inputs leave of y
     for j in np.flatnonzero(varies):
         at = held + j
         others = np.delete(x, at, axis=1)
@@ -347,8 +348,11 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         said = f"the history shows no effect of {what} that holds on both readings (the rows and their changes point opposite ways)"
     else:
         said = f"the history shows no effect of {what} on the column"
-    if abs(shift) < STILL * spread(y):
-        return say(said + ", and the model moves it by less than a tenth of its spread", sign="0")
+    # Still is judged against what the history leaves of the column, not its whole spread: a trending column's spread is
+    # mostly its trend, and a shift of several residual spreads would otherwise pass as none.
+    left = read["residual_sd"] if np.isfinite(read["residual_sd"]) and read["residual_sd"] > 0 else spread(y)
+    if abs(shift) < STILL * left:
+        return say(said + ", and the model moves it by less than a tenth of what the history leaves of its spread", sign="0")
     return say(said + ", and the model moves it")
 
 
@@ -380,7 +384,7 @@ def assumptions() -> list[dict]:
     return [
         {"field": "sign", "value": "no confounding", "basis": "assumed: nothing that set the input also moved the column, beyond the other inputs and the calendar's cycles, which are held. The model and the history's regression read the same rows with the same features, so their agreement is one piece of evidence: the association holds under a linear and under a flexible fit. It is read for the same period; a lag of the input is not held (docs/whatif.md)"},
         {"field": "sign", "value": INTERVAL, "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)"},
-        {"field": "sign", "value": STILL, "basis": "assumed: a shift under this share of the column's whole spread counts as none. Given it, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect (docs/whatif.md); that measures the model's stillness at this threshold, not the threshold"},
+        {"field": "sign", "value": STILL, "basis": "assumed: a shift under this share of what the history's regression leaves of the column (its residual spread; the column's own spread where no regression is read) counts as none. At the former threshold, a tenth of the column's whole spread, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect; that measures the model's stillness at a threshold, not the threshold (docs/whatif.md, the record of 2026-10-17 for this one)"},
         {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
         {"field": "basis", "value": TIED, "basis": "assumed: an input that is not told apart is said to follow another input by name where their correlation is at least this; else the other inputs and the calendar's cycles together"},
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},

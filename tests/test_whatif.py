@@ -61,6 +61,24 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
         assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
 
 
+def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_spread():
+    # A column climbing from 100 to 1,000 with a residual spread of 10 and an input it does not answer: the whole spread
+    # is 260, so a model shift of 25 (2.5 residual spreads) passed as "still" before; now it is a move.
+    rng = np.random.default_rng(11)
+    stamps = _weekly(periods=200)[0]
+    x = rng.uniform(0, 1, 200)
+    y = np.linspace(100, 1000, 200) + rng.normal(0, 10, 200)
+    starts = whatif.places(rng)
+    read = whatif.history(stamps, y, np.column_stack([x]), starts)
+    assert 7 < read["residual_sd"] < 13 and whatif.spread(y) > 200
+    m = _member(stamps, y, {"x": x}, "x")
+    plan = np.full(13, 1000.0)
+    moved = whatif.reading(m, "y", "x", plan, plan, plan + 25.0, starts)
+    still = whatif.reading(m, "y", "x", plan, plan, plan + 0.5, starts)
+    assert moved["sign"] == "?" and moved["basis"].endswith("and the model moves it")
+    assert still["sign"] == "0" and "what the history leaves" in still["basis"]
+
+
 def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
     # Promotions only on weekdays, sales higher on weekdays anyway: the day of the week must be held.
     rng = np.random.default_rng(3)

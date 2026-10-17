@@ -67,7 +67,11 @@ Every member is read on its own, and every target on its own
 3. **The sign.** `+` or `-` where both readings point the same way
    with neither interval over zero, and the model's shift goes that
    way. `0` where the history shows nothing and the model's shift is
-   under a tenth of the column's spread. `?` otherwise, with the
+   under a tenth of what the history's regression leaves of the
+   column, its residual spread (since 2026-10-17; before, a tenth of
+   the column's whole spread, which on a trending column is mostly
+   the trend, so that a shift of several residual spreads passed as
+   none). `?` otherwise, with the
    reason: the two disagree; the input never varied; it cannot be
    told apart from another input; the change, or the input as planned,
    goes beyond what the history holds; the history is too short.
