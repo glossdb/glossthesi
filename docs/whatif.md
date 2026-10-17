@@ -25,7 +25,9 @@ Decided on 2026-10-01:
   moved the column, declared on every answer.
 - **The size as a guess between two estimates.** The model's shift
   and the history's own estimate are both returned. The model errs
-  low more often than high.
+  low more often than high; on a lever that rarely moved in the
+  history it barely moves at all, and the history's estimate is the
+  one to read (against a truth, below).
 - **The error, measured on the caller's own table.** The last periods
   of the history are held back, predicted and compared: the error of
   the level, one window. Beside it, what the history leaves of the
@@ -74,15 +76,6 @@ Every member is read on its own, and every target on its own
    or the column moves back then. Before 2026-10-17 the same-period
    slope stood alone, and could state the sign of a sustained change
    wrong where the period after undoes it.
-   A positive column whose fitted trend over a history of two years
-   or more, the calendar held, doubles it or halves it (`GROWTH`) is
-   read on its logarithm (under two years a trend and the year's
-   cycle are not told apart, so the column is read on amounts): what an input does
-   to a column that grew is a share of its level, not an amount, and
-   a straight line on amounts misreads it (its interval, in amounts
-   of an early level, is too narrow for the late ones). The slopes
-   are translated at the plan's level per period, and the reason says
-   so (since 2026-10-17).
    It is read twice, on the rows and on their changes from one row to
    the next; a drift two columns merely share shows only in the
    first. The history is drawn again 300 times in runs of
@@ -247,15 +240,14 @@ answerable, saying the history's estimate points both ways over the
 periods ahead: six on the hourly radiation, which the suite changes
 in the daylight hours only, so the first night hour carries the lag's
 slope alone and the other way, and the change nets to nothing over
-the day. The logs reading for a column that grew (step 3.8) fires on
-no development series: Rossmann's stores move by 0.92 to 1.33 over
-2.3 years, Favorita's and M5's sales hold zeros, the hourly and the
-air-quality histories are under two years; its record repeats every
-count. Two rules for growth were dropped the same hour: a quarter
-against a quarter took a year's season for growth (the air-quality
-nitrogen oxides, 2.9-fold between winter and summer), and a fitted
-trend on a half-year of hourly history could not be told from the
-year's cycle (a fiftieth on one series, 32-fold on another).
+the day. A logs reading for a column that grew (step 3.8) was served for
+a day and withdrawn: judged on the six Favorita store series that
+double over their history, the only growing series at hand, it put
+the model's scenario inside the history's interval on 35% of the
+periods where the reading on amounts had 67%, and stated no sign
+either way (GK-59 in `../glosstheval/docs/findings.md`; the two
+growth rules dropped before it are in GK-58). The experiment stays,
+to be asked again on a growing corpus with a truth.
 
 ## Candidates behind the three predictions
 
@@ -335,6 +327,59 @@ moves anyway, as it does there with one input. The German market's
 two forecasts show an effect each and none together, their estimates
 pulling apart, and the route states no sign: the right answer to a
 pair that cancels.
+
+## Against a truth
+
+Everything above scores the sign against the history's own straight
+line, which the model also reads. On 2026-10-17 it was scored against
+what a change really did, on the Causal Chambers wind tunnel (Gamella,
+Peters and Bühlmann, Nature Machine Intelligence 2025): a real device
+whose actuators are set by protocol and whose causal graph is
+published, the intake fan's load driving its speed, its current and
+the pressures inside the tunnel, the outlet fan's load its own speed
+and current, neither touching the ambient pressure or the speaker's
+signals (Method 12 of `../glosstheval/docs/evaluation.md`, GK-60;
+record `scorecards/experiments/2026-10-17-chambers-e2cd971.json`).
+Ten runs where the intake load alone steps between four values and
+sixteen where every actuator walks at random, 104 members with a week
+per row by convention, the load moved by the suite's own rule.
+
+- **Every sign stated was right:** 233 of 233, on the fan speeds, the
+  currents and the two pressures inside the tunnel, under both loads.
+- **What the lever cannot touch answered `0` or `?` on 335 of 344;**
+  a sign on 9 (2.6%), under the 10% the rule's two 90% intervals
+  allow. This is the false-positive line against a truth.
+- **A sign was stated where there is an effect** on 75 to 100% of the
+  walks' answers, and on 17 to 75% of the changepoint runs', where the
+  load took four values and stepped nine times in 2,100 rows: there
+  the model's shift was a median 0.3% of the true change on the fan's
+  speed, 1 to 2% on the pressures, 22% on the current, while the
+  history's regression had 79 to 89% of it, and most answers said the
+  two disagree. On a lever that rarely moved, the model does not move
+  it; a list price that changed four times in four years is that case.
+- **The device is not a business,** and the fan has a threshold near a
+  load of 0.15 that a straight line averages over; the business tables
+  above are where the agreement is measured, this is where the sign is
+  judged.
+
+On the business tables the same two questions were asked without a
+truth, by refuters (Method 11, GK-61; record
+`scorecards/experiments/2026-10-17-refuters-af2df33.json`):
+
+- **The chance line:** with the lever's history shifted around the
+  member's rows, so that its own dependence stays and its alignment
+  with the column goes, a sign is stated on 8 of 219 answers, 3.7%
+  with a standard error of 0.9 clustered by table; 10% is the most the
+  rule's two 90% intervals allow.
+- **The false-positive line:** another member's column under this
+  member's lever gets a sign on 0 of 32 where the lever is the member's
+  own; where every member shares the lever (a chain's promotion, a
+  market's forecast, the weather) the other member's column answers it,
+  as it should, and that control says nothing.
+- A column of noise among the inputs leaves the sign on 116 of 117;
+  half the history keeps it on 104 of 117 and flips none; the mirrored
+  decrease flips it on 105 of 111 and loses 6 where the decrease meets
+  the history's floor.
 
 ## Where the history's interval is weak
 
