@@ -1,6 +1,6 @@
 [project]
 name = "glossthesi"
-version = "0.2.0"
+version = "0.3.0"
 description = "The model service behind glossql: forecasts and the walk by Chronos-2, anomaly detection and the what-if by TabICL, over HTTP"
 requires-python = ">=3.13,<3.14"
 license = "AGPL-3.0-or-later"
