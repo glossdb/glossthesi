@@ -61,10 +61,10 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
         assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
 
 
-def test_a_change_that_points_both_ways_over_the_periods_ahead_gets_no_one_sign():
+def test_a_change_that_points_both_ways_over_the_periods_ahead_is_said_so_and_is_not_no_effect():
     # y answers x upward and z downward; the scenario raises x in the first four periods and z in the last nine. The
-    # mean of the history's estimate nets to about nothing, and read on the mean the answer was `0`, "no effect
-    # visible", while every period showed an effect. A sign is for every period or for none.
+    # mean of the history's estimate nets to about nothing, and read on the mean alone the answer was `0`, "no effect
+    # visible", while every period showed an effect. The sign is the horizon's as a whole, and the periods are said.
     rng = np.random.default_rng(21)
     stamps = _weekly(periods=160)[0]
     x, z = rng.uniform(0, 1, 160), rng.uniform(0, 1, 160)
@@ -76,8 +76,14 @@ def test_a_change_that_points_both_ways_over_the_periods_ahead_gets_no_one_sign(
     m.scenario["z"][4:] = np.minimum(m.plan["z"][4:] + 0.3, z[:147].max())
     plan = np.full(13, 50.0)
     got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.01, starts)
-    assert got["sign"] == "?" and "points both ways" in got["basis"] and "4 up, 9 down" in got["basis"]
+    assert got["sign"] == "?" and "points both ways" in got["basis"] and "4 up, 9 down" in got["basis"] and "nets to nothing" in got["basis"]
     assert (got["history_value"][:4] > plan[:4]).all() and (got["history_value"][4:] < plan[4:]).all()
+    # Raise x in the first ten periods instead: the horizon's mean is up, the sign is stated, and the periods are said.
+    m.scenario["x"], m.scenario["z"] = m.plan["x"].copy(), m.plan["z"].copy()
+    m.scenario["x"][:10] = np.minimum(m.plan["x"][:10] + 0.3, x[:147].max())
+    m.scenario["z"][10:] = np.minimum(m.plan["z"][10:] + 0.3, z[:147].max())
+    got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.4, starts)
+    assert got["sign"] == "+" and "10 up, 3 down" in got["basis"] and "the horizon's as a whole" in got["basis"]
     # One lever raised in every period keeps its sign, as before.
     assert whatif.reading(_member(stamps, y, {"x": x, "z": z}, "x"), "y", "x", plan, plan, plan + 0.4, starts)["sign"] == "+"
 

@@ -75,13 +75,14 @@ Every member is read on its own, and every target on its own
    column, its residual spread (since 2026-10-17; before, a tenth of
    the column's whole spread, which on a trending column is mostly
    the trend, so that a shift of several residual spreads passed as
-   none). A sign is for every period ahead or for none: where the
-   history's estimate of the change is off zero upward in some periods
-   and downward in others (two levers moving in different periods, a
-   change that reverses), the answer is `?` and says so, and the
-   per-period numbers stand (since 2026-10-17; before, the sign was
-   read on the mean over the periods, which could net to nothing).
-   `?` otherwise, with the
+   none). The sign is the horizon's as a whole, the mean change over
+   the periods ahead. Where the history's estimate is off zero upward
+   in some periods and downward in others (two levers moving in
+   different periods, a change that reverses) the reason says so
+   beside the sign, with the counts, and the per-period numbers stand;
+   where such a change nets to nothing over the horizon the answer is
+   `?` and says so, not `0` (since 2026-10-17; before, it read as no
+   effect visible). `?` otherwise, with the
    reason: the two disagree; the input never varied; it cannot be
    told apart from another input; the change, or the input as planned,
    goes beyond what the history holds; the history is too short.

@@ -347,19 +347,20 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         for j, c in enumerate(changed)
     ]
     what = "the input" if one else "the inputs together"
-    # A sign is for every period ahead or for none: where the history's estimate of the change is off zero upward in
-    # some periods and downward in others (two levers moving in different periods, a change that reverses), the mean
-    # could net to nothing or point one way while the periods say otherwise; the per-period numbers are served as they are.
+    # The sign is the horizon's as a whole: the mean change over the periods ahead. Where the history's estimate is off
+    # zero upward in some periods and downward in others (two levers moving in different periods, a change that
+    # reverses) the sign says so beside it, and where such a change nets to nothing it is not "no effect visible".
     up, down = int((low_p > 0).sum()), int((high_p < 0).sum())
-    if up and down:
-        return say(f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down), so no one direction holds for them all")
+    both_ways = f"; the history's estimate points both ways over the periods ahead ({up} up, {down} down), and the sign is the horizon's as a whole" if up and down else ""
     # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
     if shows:
         way = np.sign(slopes @ moved)
         if np.sign(shift) == way and way != 0:
-            return say(f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
-        return say("the model and the history disagree on the direction")
+            return say(f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way{both_ways}", sign="+" if way > 0 else "-")
+        return say("the model and the history disagree on the direction" + both_ways)
+    if up and down:
+        return say(f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down) and nets to nothing over the horizon as a whole")
     # One reading off zero and the other not is said as such: it is not the same as neither showing anything.
     on_rows, on_changes = lo > 0 or hi < 0, lo_c > 0 or hi_c < 0
     if on_rows and not on_changes:
