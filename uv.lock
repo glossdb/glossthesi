@@ -414,7 +414,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chronos-forecasting", specifier = ">=2" },
+    { name = "chronos-forecasting", specifier = "==2.3.2" },
     { name = "google-auth", marker = "extra == 'auth'", specifier = ">=2.30" },
     { name = "huggingface-hub", specifier = ">=0.30" },
     { name = "numpy", specifier = ">=2" },

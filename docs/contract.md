@@ -309,14 +309,15 @@ the contract does not depend on it.
 | 400 | The body, the table or the specification has the wrong shape; the error names what. |
 | 401 | No bearer this service accepts. |
 | 404 | No such route. |
-| 413 | The body is over the cap: send it in parts. |
+| 413 | The body is over the cap, as sent or as the Arrow stream decodes to (a compressed stream may be many times its wire size): send it in parts. |
 | 422 | The service refuses the read: a specification that does not fit the table (`errors` names the fields), a frame it cannot score. |
 | 429 | The queue is full for this caller; `Retry-After` says how long. |
-| 500 | The service failed; the traceback is in its log, not on the wire. |
+| 500 | The service failed; the traceback is in its log, not on the wire. The device's memory running out is this, never members that failed alone. |
 | 503 | The instance is stopping; `Retry-After` says when to retry. |
 
 `GET /healthz` answers `status`, `service`, `version`, `device`,
-`loaded` and the owner's counters, outside the gate.
+`loaded`, `checkpoints` (the TabICL files and the Chronos-2 commit the
+build serves) and the owner's counters, outside the gate.
 
 ## Authentication and naming
 

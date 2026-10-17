@@ -102,6 +102,7 @@ def configure(version: str) -> dict[str, Any]:
         cells=meter.create_counter("glossthesi.cells", description="cells answered (float64 values)"),
         refusals=meter.create_counter("glossthesi.refusals", description="requests refused, by status"),
         failures=meter.create_counter("glossthesi.failures", description="cycles that raised"),
+        item_failures=meter.create_counter("glossthesi.item_failures", description="members or columns that failed alone inside a served answer"),
         cycle_seconds=meter.create_histogram("glossthesi.cycle.seconds", unit="s", description="device seconds per cycle"),
         queue_cells=meter.create_gauge("glossthesi.queue.cells", description="cells waiting after the cycle was taken"),
     )
@@ -145,6 +146,12 @@ def failed(kind: str, jobs: int, error: BaseException) -> None:
 def refused(status: int, caller: str | None, route: str, reason: str) -> None:
     log.info("refused", extra={"status": status, "caller": caller, "route": route, "reason": reason})
     _add("refusals", 1, status=str(status), route=route)
+
+
+def item_failed(caller: str | None, route: str, reason: str) -> None:
+    """One member or column of a served request failed alone (`answer.errors`): the request was answered, not refused."""
+    log.info("item_failed", extra={"caller": caller, "route": route, "reason": reason})
+    _add("item_failures", 1, route=route)
 
 
 def span(name: str, **attributes: Any):

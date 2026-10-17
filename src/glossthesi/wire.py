@@ -50,12 +50,23 @@ class Request:
     encoding: str  # ARROW or JSON
 
 
-def parse(content_type: str, raw: bytes) -> Request:
-    """The body as a table and a specification, by its content type."""
+def parse(content_type: str, raw: bytes, cap: int | None = None) -> Request:
+    """The body as a table and a specification, by its content type.
+    `cap` bounds what an Arrow stream decodes to, in bytes: its batches
+    are read one at a time and the body is refused with a 413 once they
+    pass it, since a compressed stream may be many times its wire size.
+    One batch is decoded whole before it is counted."""
     media = content_type.split(";")[0].strip().lower()
     if media == ARROW:
         try:
-            table = pa.ipc.open_stream(raw).read_all()
+            reader = pa.ipc.open_stream(raw)
+            batches, size = [], 0
+            for batch in reader:
+                size += batch.nbytes
+                if cap is not None and size > cap:
+                    raise Refusal(f"the table decodes to more than {cap >> 20} MB — send it in parts", 413)
+                batches.append(batch)
+            table = pa.Table.from_batches(batches, reader.schema)
         except (pa.ArrowException, ValueError) as e:
             raise Refusal(f"the body is not an Arrow IPC stream: {e}")
         meta = table.schema.metadata or {}
@@ -155,11 +166,18 @@ def clean(value: Any) -> Any:
 
 def is_category(field: pa.Field) -> bool:
     t = field.type
+    if pa.types.is_dictionary(t):
+        t = t.value_type  # a dictionary-encoded column is its values' kind
     return pa.types.is_string(t) or pa.types.is_large_string(t) or pa.types.is_string_view(t) or pa.types.is_boolean(t)
 
 
 def value_columns(table: pa.Table) -> list[str]:
     return [name for name in table.column_names if name not in RESERVED]
+
+
+def _plain(column: pa.ChunkedArray) -> pa.ChunkedArray:
+    """A dictionary-encoded column as its values."""
+    return column.cast(column.type.value_type) if pa.types.is_dictionary(column.type) else column
 
 
 def numeric(table: pa.Table, name: str) -> np.ndarray:
@@ -170,7 +188,7 @@ def numeric(table: pa.Table, name: str) -> np.ndarray:
     if is_category(table.schema.field(name)):
         raise Refusal(f"column `{name}` holds text, not numbers")
     try:
-        cast = column.cast(pa.float64())
+        cast = _plain(column).cast(pa.float64())
     except (pa.ArrowException, TypeError) as e:
         raise Refusal(f"column `{name}` is not numeric ({column.type}): {e}")
     return np.asarray(cast.to_numpy(zero_copy_only=False), dtype=np.float64)
@@ -181,7 +199,10 @@ def categories(table: pa.Table, name: str) -> np.ndarray:
     column = table.column(name)
     if pa.types.is_null(column.type):
         return np.full(table.num_rows, "", dtype=object)
-    cast = column.cast(pa.string())
+    try:
+        cast = _plain(column).cast(pa.string())
+    except (pa.ArrowException, TypeError) as e:
+        raise Refusal(f"column `{name}` cannot be read as text ({column.type}): {e}")
     return np.array(["" if v is None else v for v in cast.to_pylist()], dtype=object)
 
 
@@ -207,7 +228,10 @@ def by_member(table: pa.Table, route: str, twice: bool = False) -> tuple[pa.Tabl
     if pa.types.is_null(table.column("period").type):
         raise Refusal("`period` holds no values")
     if not is_category(table.schema.field("member")):
-        table = table.set_column(table.schema.get_field_index("member"), "member", table.column("member").cast(pa.string()))
+        try:
+            table = table.set_column(table.schema.get_field_index("member"), "member", table.column("member").cast(pa.string()))
+        except (pa.ArrowException, TypeError) as e:
+            raise Refusal(f"`member` cannot be read as text ({table.column('member').type}): {e}")
     try:
         table = table.sort_by([("member", "ascending"), ("period", "ascending")])
     except pa.ArrowException as e:

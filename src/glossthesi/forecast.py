@@ -41,6 +41,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 MODEL = "amazon/chronos-2"
+# The checkpoint's commit on the hub: the weights every measured number describes (docs/forecast.md). A move is a
+# change of model and runs the evaluation again; the build bakes this revision and /healthz names it.
+REVISION = "29ec3766d36d6f73f0696f85560a422f50e8498c"
 GROUP = 100  # series forecast together, at most: the size the model's published results were made with
 MIN_HISTORY = 6  # known values a series needs
 MAX_HORIZON = 1024
@@ -62,6 +65,12 @@ GRID = (0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 
 
 class ForecastError(Exception):
     """A series that cannot be forecast, in words the client can act on."""
+
+
+def out_of_memory(e: BaseException) -> bool:
+    """Whether a failure is the device's memory running out — torch says so in its text on CUDA and on Metal.
+    That fails the job, not a series: it reaches the owner, which hands the device's memory back (owner.py)."""
+    return isinstance(e, MemoryError) or "out of memory" in str(e).lower()
 
 
 @dataclass
@@ -200,7 +209,7 @@ class Chronos2:
                 import torch
                 from chronos import BaseChronosPipeline
 
-                self._pipeline = BaseChronosPipeline.from_pretrained(MODEL, device_map=self.device, torch_dtype=torch.float32)
+                self._pipeline = BaseChronosPipeline.from_pretrained(MODEL, revision=REVISION, device_map=self.device, torch_dtype=torch.float32)
             return self._pipeline
 
     def forecast(self, series: list[Series], horizon: int, levels: list[float], spans: list[int] | None = None, grain: str = "month") -> list[list[dict | ForecastError] | ForecastError]:
@@ -231,6 +240,8 @@ class Chronos2:
             try:
                 answered, _mean = self.pipeline().predict_quantiles(inputs, prediction_length=horizon, quantile_levels=asked, batch_size=GROUP, cross_learning=True)
             except Exception as e:  # the package's own refusals, by their text: the series forecast with these fail, the others stand
+                if out_of_memory(e):
+                    raise
                 for i in mine:
                     out[i] = ForecastError(f"the model could not forecast this series and the {len(mine) - 1} sent with the same covariates: {e}")
                 continue
@@ -253,4 +264,4 @@ def fetch_checkpoints() -> None:
     """Pull Chronos-2 into the hub cache — the image bakes it."""
     from huggingface_hub import snapshot_download
 
-    snapshot_download(MODEL)
+    snapshot_download(MODEL, revision=REVISION)

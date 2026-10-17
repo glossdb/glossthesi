@@ -115,6 +115,8 @@ class Owner:
                 while not self._waiting:
                     self._wake.wait()
                 job = self._take()
+            if not job.future.set_running_or_notify_cancel():
+                continue  # cancelled while it waited: nothing to run, nothing to count
             started = time.perf_counter()
             failed = False
             try:

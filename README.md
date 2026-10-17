@@ -29,19 +29,22 @@ GLOSSTHESI_INSECURE_OPEN=true uv run glossthesi   # no check at all: a laptop tr
 | `GLOSSTHESI_ADDR` | where to listen; default `127.0.0.1:8100` |
 | `GLOSSTHESI_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
 | `GLOSSTHESI_AUDIENCE`, `GLOSSTHESI_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
-| `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host). With neither set the service does not start, and every door refuses |
+| `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host); a caller is recorded as the key's place in the list (`key-1`), never as the key. With neither set the service does not start, and every door refuses |
 | `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossql's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
 | `GLOSSTHESI_VERSION` | the build's name, on every answer, on `/healthz` and every log line; the image bakes the commit |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | a collector to send traces, metrics and logs to (OTLP/HTTP); unset, the JSON log lines on stdout are all; the `otel` extra |
 | `GLOSSTHESI_QUEUE_MB` | what may wait for the device, in MB of tables; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |
-| `GLOSSTHESI_MAX_BODY_MB` | the largest body parsed; default 32 — past it a `413` |
+| `GLOSSTHESI_MAX_BODY_MB` | the largest body parsed; default 32 — past it a `413`, as the bytes arrive and as an Arrow stream decodes, batch by batch (a compressed stream may be many times its wire size) |
 | `GLOSSTHESI_PRELOAD` | `0` leaves Chronos-2 to its first forecast; default all models load before the port opens |
 | `GLOSSTHESI_MISFIT_WORKERS` | threads fitting the misfit read's conditionals side by side; default four on CUDA, one elsewhere |
 | `HF_HUB_OFFLINE` | `1` in the image: the checkpoints are baked, nothing is fetched at start |
 
 The checkpoints come from the Hugging Face hub cache (`jingang/TabICL`,
-the v2 regressor and classifier; `amazon/chronos-2`). A container bakes
-them at build (`Dockerfile`); a laptop fetches them on first start.
+the v2 regressor and classifier, dated in their file names;
+`amazon/chronos-2` at the commit `forecast.REVISION` names). A
+container bakes them at build (`Dockerfile`); a laptop fetches them on
+first start; `/healthz` says which are served, since every measured
+number describes those weights and a move is a change of model.
 
 ## The wire
 
@@ -60,7 +63,7 @@ the fields to repair where the specification is at fault.
 |---|---|---|
 | `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed; the answer object's `coverage` says how often each band held on held-out data at that grain and step |
 | `POST /misfit` | `categorical`, `cells`, `folds` | a row per frame row: `score`, and with `cells` a column per frame column |
-| `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `owner` |
+| `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `checkpoints`, `owner` |
 
 A forecast, in the JSON encoding:
 
@@ -139,6 +142,9 @@ against the host's driver; one instance until 429s say otherwise;
 authentication by identity at the Cloud Run edge and again in the
 service; the JSON log lines kept by Cloud Logging and, with the
 collector, spans and metrics in Cloud Trace and Cloud Monitoring.
+The device's memory running out fails the job as a `500`, the owner
+hands the memory back, and the caller retries; it is never reported
+as members that failed alone.
 
 The image is `ghcr.io/glossdb/glossthesi:<version>` (and `:latest`),
 public, from `.github/workflows/release.yml`; Cloud Run pulls it by
@@ -156,8 +162,10 @@ image has its checkpoints and its version. `:latest` moves at a tag only.
 
 What the service says about itself (`telemetry.py`): a JSON line on
 stdout per start, per job (kind, cells, callers, device seconds, what
-still waits), per refusal (status, caller, route, reason) and per
-failure (with the traceback) — never a payload. A host that keeps
+still waits), per refusal (status, caller, route, reason), per member
+or column that failed alone inside a served answer (`item_failed`, not
+a refusal) and per failure (with the traceback) — never a payload and
+never a key. A host that keeps
 stdout has that as-is; with `OTEL_EXPORTER_OTLP_ENDPOINT` the same
 goes to a collector as spans (per request, per job), counters (jobs,
 refusals by status, failures), a histogram of job seconds and a gauge

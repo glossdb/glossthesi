@@ -689,3 +689,147 @@ def test_whatif_refusals(client):
     assert "needs an input" in client.send("/whatif", WHATIF, {k: v for k, v in table.items() if k not in ("x", "z")}).json()["error"]
     assert "`targets`" in refused(spec={"targets": ["nope"], "levels": [0.5]}).json()["error"]
     assert "`levels`" in refused(spec={"targets": ["y"]}).json()["error"]
+
+
+def test_a_key_is_named_by_its_place_and_never_written_to_the_log(client, monkeypatch, capsys):
+    import logging
+
+    from glossthesi import telemetry
+
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", list(root.handlers))
+    telemetry.configure("test")
+    monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
+    monkeypatch.setenv("GLOSSTHESI_KEYS", "s3cr3t-one, s3cr3t-two")
+    bearer = {"authorization": "Bearer s3cr3t-two"}
+    # A refusal, a failure and a wrong key: every line names the caller by its place, none holds a key.
+    assert client.post("/misfit", content=b"x", headers={"content-type": "text/plain", **bearer}).status_code == 400
+    monkeypatch.setattr(app_module.Misfit, "parse", staticmethod(lambda table, spec: 1 / 0))
+    assert client.send("/misfit", {}, MISFIT, headers=bearer).status_code == 500
+    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer s3cr3t-three"}).status_code == 401
+    out = capsys.readouterr().out
+    assert "s3cr3t" not in out
+    lines = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    assert {line["caller"] for line in lines if line["event"] in ("refused", "request_failed")} == {"key-2", None}
+
+
+def test_an_audience_with_nobody_allowed_is_nothing_arranged(client, monkeypatch):
+    from glossthesi import __main__ as entry
+
+    monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
+    monkeypatch.setenv("GLOSSTHESI_AUDIENCE", "https://service")
+    for name in ("GLOSSTHESI_CALLERS", "GLOSSTHESI_KEYS"):
+        monkeypatch.delenv(name, raising=False)
+    assert app_module.arrangement() is None
+    r = client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer a-token"})
+    assert r.status_code == 401 and "GLOSSTHESI_CALLERS" in r.json()["error"]
+    with pytest.raises(SystemExit, match="GLOSSTHESI_CALLERS"):
+        entry.main()
+
+
+def test_a_compressed_arrow_stream_is_bounded_by_what_it_decodes_to(client, monkeypatch):
+    monkeypatch.setattr(app_module, "MAX_BODY_MB", 1)
+    n = 60_000  # three float64 columns of zeros: 1.4 MB a batch once decoded, a few hundred bytes on the wire
+    t = pa.table({"member": pa.array(np.zeros(n)), "period": pa.array(np.zeros(n)), "y": pa.array(np.zeros(n))})
+    t = t.replace_schema_metadata({"spec": json.dumps(SPEC)})
+    out = io.BytesIO()
+    with pa.ipc.new_stream(out, t.schema, options=pa.ipc.IpcWriteOptions(compression="zstd")) as writer:
+        for _ in range(4):
+            writer.write_table(t)
+    body = out.getvalue()
+    assert len(body) < 20_000
+    r = client.post("/forecast", content=body, headers={"content-type": wire.ARROW})
+    assert r.status_code == 413 and "decodes to more than 1 MB" in r.json()["error"]
+
+
+def test_a_body_without_a_declared_length_is_stopped_at_the_cap(client, monkeypatch):
+    monkeypatch.setattr(app_module, "MAX_BODY_MB", 0)
+    pulled = []
+
+    async def chunks():
+        for i in range(3):
+            pulled.append(i)
+            yield b"x" * 16
+
+    r = client.post("/misfit", content=chunks(), headers={"content-type": wire.JSON})
+    assert r.status_code == 413 and "in parts" in r.json()["error"]
+    assert pulled == [0]  # refused at the first chunk over the cap, the rest never read
+
+
+def test_the_devices_memory_running_out_fails_the_job_and_not_a_member(client, monkeypatch):
+    import torch
+
+    fake = kernels.get()
+
+    def out_of_memory(*_a, **_k):
+        raise torch.OutOfMemoryError("CUDA out of memory. Tried to allocate 2.00 GiB")
+
+    monkeypatch.setattr(fake.chronos, "predict_quantiles", out_of_memory)
+    r = client.send("/forecast", SPEC, _table(a=HISTORY, b=HISTORY))
+    assert r.status_code == 500 and r.json() == {"error": "the service failed: OutOfMemoryError"}
+    for _ in range(100):  # the owner counts the failure once the caller has heard
+        if client.get("/healthz").json()["owner"]["failed"]:
+            break
+        time.sleep(0.01)
+    assert client.get("/healthz").json()["owner"]["failed"] == 1
+    # The package's own refusal still fails the members forecast together, alone, inside a 200.
+    monkeypatch.undo()
+
+
+def test_the_whatif_read_lets_the_devices_memory_failure_through_and_a_series_fault_fail_alone():
+    import torch
+
+    from glossthesi import whatif
+
+    class Forecaster:
+        def __init__(self, error):
+            self.error = error
+
+        def predict_df(self, past, ahead, quantiles):
+            raise self.error
+
+    k = kernels.Kernels.__new__(kernels.Kernels)
+    stamps = np.arange("2024-01-01", "2024-02-01", dtype="datetime64[D]").astype("datetime64[ms]")
+    job = whatif.Job(stamps[:-4], np.ones(27), {"x": np.ones(27)}, stamps[-4:], {"x": np.ones(4)})
+    k._forecaster = Forecaster(torch.OutOfMemoryError("MPS backend out of memory"))
+    with pytest.raises(torch.OutOfMemoryError):
+        k.series([job, job], [0.5])
+    k._forecaster = Forecaster(ValueError("a series the pipeline refuses"))
+    assert all(isinstance(got, ValueError) for got in k.series([job, job], [0.5]))
+
+
+def test_dictionary_encoded_text_is_a_category_and_an_unreadable_member_is_the_callers_fault(client):
+    n = len(HISTORY) + 3
+    columns = {
+        "member": pa.array(["a"] * n),
+        "period": pa.array(list(range(1, n + 1))),
+        "status": pa.array(["actual"] * len(HISTORY) + ["forecast"] * 3),
+        "y": pa.array(HISTORY + [None] * 3, type=pa.float64()),
+        "season": pa.array(["w", "s"] * (n // 2) + ["w"] * (n % 2)).dictionary_encode(),
+    }
+
+    def stream(**replace):
+        t = pa.table(columns | replace).replace_schema_metadata({"spec": json.dumps({"targets": ["y"], "horizon": 3, "levels": [0.5]})})
+        out = io.BytesIO()
+        with pa.ipc.new_stream(out, t.schema) as writer:
+            writer.write_table(t)
+        return out.getvalue()
+
+    r = client.post("/forecast", content=stream(), headers={"content-type": wire.ARROW})
+    assert r.status_code == 200 and kernels.get().chronos.kinds == [{"season": "O"}]
+    r = client.post("/forecast", content=stream(member=pa.array([[1]] * n)), headers={"content-type": wire.ARROW})
+    assert r.status_code == 400 and "`member`" in r.json()["error"]
+
+
+def test_a_member_that_fails_alone_is_not_a_refusal(client, monkeypatch, capsys):
+    import logging
+
+    from glossthesi import telemetry
+
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", list(root.handlers))
+    telemetry.configure("test")
+    r = client.send("/forecast", SPEC, _table(a=HISTORY, b=[1, 2, 3]))
+    assert r.status_code == 200 and [e["member"] for e in r.json()["answer"]["errors"]] == ["b"]
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+    assert [line["event"] for line in lines if line["event"] in ("refused", "item_failed")] == ["item_failed"]
