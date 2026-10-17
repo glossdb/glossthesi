@@ -38,8 +38,10 @@ import numpy as np
 RESAMPLES = 300
 INTERVAL = 0.90  # of the history's slope, by resampling
 MIN_RUNS = 10  # a run of neighbouring rows is at most this share of the history: a resample is never the history itself
+REACH = 0.99  # the share of history rows whose nearest-neighbour distance sets how far a combination of inputs may lie
+BEYOND_SHARE = 0.10  # a combination is beyond where more than this share of the periods ahead lie past the reach
 SEPARABLE = 0.10  # the share of an input's variation the other inputs and the calendar must leave for it to be told apart
-STILL = 0.10  # a shift under this share of the column's spread counts as none
+STILL = 0.10  # a shift under this share of what the history's regression leaves of the column (its residual spread) counts as none
 MOSTLY_EMPTY = 0.50  # an input empty in more than this share of the history's rows is not read
 CONTEXT = 4096  # the past periods TabICL's forecaster reads at most
 MIN_HISTORY = 26  # the rows a member needs behind a prediction
@@ -86,6 +88,13 @@ def design(stamps: np.ndarray, inputs: np.ndarray) -> np.ndarray:
     return np.column_stack([*held, inputs])
 
 
+def rows_needed(stamps: np.ndarray, inputs: int) -> int:
+    """The actual periods a member needs behind a prediction: `MIN_HISTORY`, or the columns the history's reading
+    holds plus `EXTRA_ROWS` where that is more — 16 with two inputs on a monthly or weekly table, 22 on a daily, 45 on
+    an hourly — so that the door says so instead of the reading answering "too short"."""
+    return max(MIN_HISTORY, design(stamps, np.zeros((len(stamps), inputs))).shape[1] + EXTRA_ROWS)
+
+
 def places(rng: np.random.Generator) -> np.ndarray:
     """Where each run of rows starts when the history is drawn again, as a share of the history: the same for every series read with it."""
     return rng.uniform(size=(RESAMPLES, CONTEXT))
@@ -109,7 +118,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
     k = inputs.shape[1]
     slopes, draws, free, explains = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan), np.zeros(k), np.full(k, np.nan)
     slopes_c, draws_c = np.full(k, np.nan), np.full((RESAMPLES, k), np.nan)
-    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan}
+    out = {"slope": slopes, "draws": draws, "slope_on_changes": slopes_c, "draws_on_changes": draws_c, "free": free, "explains": explains, "explains_together": np.nan, "residual_sd": np.nan}
     full = design(stamps, inputs)
     held = full.shape[1] - k
     keep = ~np.isnan(y) & ~np.isnan(full).any(axis=1)
@@ -126,6 +135,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
 
     coef = np.linalg.lstsq(x, seen, rcond=None)[0]
     left = np.sum((seen - x @ coef) ** 2)
+    out["residual_sd"] = float(np.sqrt(left / max(len(seen) - x.shape[1], 1)))  # what the level, trend, cycles and inputs leave of y
     for j in np.flatnonzero(varies):
         at = held + j
         others = np.delete(x, at, axis=1)
@@ -155,17 +165,22 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
 
 
 def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
-    """Whether a row of `ahead` (periods, inputs), a combination of
-    several inputs, lies farther from every row of `past` (rows,
-    inputs) than the loneliest past row lies from its own nearest
-    neighbour, each input scaled by its spread in the past: the range
-    check per input does not see a combination the history never held
-    (a promotion and a holiday that never fell together, a price never
-    cut while the promotion was on). The reach is the history's own,
-    with no number to choose: where every combination of switches has
-    a duplicate it is zero and an unseen one is beyond; where the
-    history is sparse everywhere, near is as near as it gets. Rows
-    with a gap are left out."""
+    """Whether the rows of `ahead` (periods, inputs), a combination of
+    several inputs, lie farther from every row of `past` (rows,
+    inputs) than past rows lie from their own nearest neighbour, each
+    input scaled by its spread in the past: the range check per input
+    does not see a combination the history never held (a promotion and
+    a holiday that never fell together, a price never cut while the
+    promotion was on). The reach is the distance within which 99 of
+    100 history rows find a neighbour (`REACH`): the loneliest row
+    alone set it before, so one mis-keyed row disarmed the check. A
+    combination is beyond where more than a tenth of the periods ahead
+    lie past the reach (`BEYOND_SHARE`): one odd period among thirteen
+    does not fire it, two do; a plan drawn from the history itself
+    fires it on well under one in a hundred. Where every combination
+    of switches has a duplicate the reach is zero and an unseen one is
+    beyond; where the history is sparse everywhere, near is as near as
+    it gets. Rows with a gap are left out."""
     past = past[~np.isnan(past).any(axis=1)]
     ahead = ahead[~np.isnan(ahead).any(axis=1)]
     if len(past) < 2 or not len(ahead):
@@ -183,8 +198,8 @@ def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
             out[lo : lo + 256] = np.sqrt(d2.min(axis=1))
         return out
 
-    reach = float(nearest(p, True).max())
-    return bool((nearest(a, False) > reach).any())
+    reach = float(np.quantile(nearest(p, True), REACH))
+    return bool(np.mean(nearest(a, False) > reach) > BEYOND_SHARE)
 
 
 def spread(y: np.ndarray) -> float:
@@ -255,7 +270,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     deltas = {c: member.scenario[c] - member.plan[c] for c in changed}
     shift = float(np.nanmean(scenario - plan))
     out = {
-        "sign": "?", "basis": "", "explains": np.nan, "parts": [],
+        "sign": "?", "basis": "", "explains": np.nan, "parts": [], "history_error": np.nan,
         "error": float(np.nanmean(np.abs(held_back - y[-h:]))) if (~np.isnan(y[-h:])).any() else np.nan,
         "history_value": np.full(h, np.nan), "history_low": np.full(h, np.nan), "history_high": np.full(h, np.nan),
     }  # fmt: skip
@@ -303,6 +318,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         if beyond_together(past, np.column_stack([member.scenario[c] for c in changed])):
             return say("the change goes beyond what the history holds for the inputs together: no row of the history lies near their combination")
     read = history(member.stamps, y, np.column_stack([member.inputs[c] for c in names]), starts, together=None if one else at)
+    out["history_error"] = float(read["residual_sd"])  # what the history leaves of the column: the error its estimate is read against
     for c, j in zip(changed, at):
         if not np.isfinite(read["slope"][j]) or not np.isfinite(read["slope_on_changes"][j]):
             return say("the history is too short to read how the column moved with the input" + ("" if one else f" `{c}`"))
@@ -321,7 +337,8 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     # The history's estimate per period: the plan's median plus what the change made there does, by the slopes.
     out["history_value"] = plan + change @ slopes
     per_period = draws @ change.T  # (draws, periods)
-    out["history_low"], out["history_high"] = plan + np.nanquantile(per_period, ends[0], axis=0), plan + np.nanquantile(per_period, ends[1], axis=0)
+    low_p, high_p = np.nanquantile(per_period, ends[0], axis=0), np.nanquantile(per_period, ends[1], axis=0)
+    out["history_low"], out["history_high"] = plan + low_p, plan + high_p
     # What each changed input alone does, as the mean over the periods ahead, with its interval from the same draws:
     # the parts add up to the joint estimate, so a user combines the single-lever and the multi-lever readings.
     mean_change = np.nanmean(change, axis=0)  # per input
@@ -329,14 +346,21 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         {"input": c, "history_shift": float(slopes[j] * mean_change[j]), "history_low": float(np.nanquantile(draws[:, j] * mean_change[j], ends[0])), "history_high": float(np.nanquantile(draws[:, j] * mean_change[j], ends[1]))}
         for j, c in enumerate(changed)
     ]
+    what = "the input" if one else "the inputs together"
+    # The sign is the horizon's as a whole: the mean change over the periods ahead. Where the history's estimate is off
+    # zero upward in some periods and downward in others (two levers moving in different periods, a change that
+    # reverses) the sign says so beside it, and where such a change nets to nothing it is not "no effect visible".
+    up, down = int((low_p > 0).sum()), int((high_p < 0).sum())
+    both_ways = f"; the history's estimate points both ways over the periods ahead ({up} up, {down} down), and the sign is the horizon's as a whole" if up and down else ""
     # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
-    what = "the input" if one else "the inputs together"
     if shows:
         way = np.sign(slopes @ moved)
         if np.sign(shift) == way and way != 0:
-            return say(f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
-        return say("the model and the history disagree on the direction")
+            return say(f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way{both_ways}", sign="+" if way > 0 else "-")
+        return say("the model and the history disagree on the direction" + both_ways)
+    if up and down:
+        return say(f"the history's estimate of the change points both ways over the periods ahead ({up} up, {down} down) and nets to nothing over the horizon as a whole")
     # One reading off zero and the other not is said as such: it is not the same as neither showing anything.
     on_rows, on_changes = lo > 0 or hi < 0, lo_c > 0 or hi_c < 0
     if on_rows and not on_changes:
@@ -347,8 +371,11 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         said = f"the history shows no effect of {what} that holds on both readings (the rows and their changes point opposite ways)"
     else:
         said = f"the history shows no effect of {what} on the column"
-    if abs(shift) < STILL * spread(y):
-        return say(said + ", and the model moves it by less than a tenth of its spread", sign="0")
+    # Still is judged against what the history leaves of the column, not its whole spread: a trending column's spread is
+    # mostly its trend, and a shift of several residual spreads would otherwise pass as none.
+    left = read["residual_sd"] if np.isfinite(read["residual_sd"]) and read["residual_sd"] > 0 else spread(y)
+    if abs(shift) < STILL * left:
+        return say(said + ", and the model moves it by less than a tenth of what the history leaves of its spread", sign="0")
     return say(said + ", and the model moves it")
 
 
@@ -380,11 +407,12 @@ def assumptions() -> list[dict]:
     return [
         {"field": "sign", "value": "no confounding", "basis": "assumed: nothing that set the input also moved the column, beyond the other inputs and the calendar's cycles, which are held. The model and the history's regression read the same rows with the same features, so their agreement is one piece of evidence: the association holds under a linear and under a flexible fit. It is read for the same period; a lag of the input is not held (docs/whatif.md)"},
         {"field": "sign", "value": INTERVAL, "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)"},
-        {"field": "sign", "value": STILL, "basis": "assumed: a shift under this share of the column's whole spread counts as none. Given it, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect (docs/whatif.md); that measures the model's stillness at this threshold, not the threshold"},
+        {"field": "sign", "value": STILL, "basis": "assumed: a shift under this share of what the history's regression leaves of the column (its residual spread; the column's own spread where no regression is read) counts as none. At the former threshold, a tenth of the column's whole spread, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect; that measures the model's stillness at a threshold, not the threshold. At this one, on the development tables of 2026-10-17, it stayed under on 58% of 71: a shift the lenient threshold had passed as none is a move (docs/whatif.md)"},
         {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
         {"field": "basis", "value": TIED, "basis": "assumed: an input that is not told apart is said to follow another input by name where their correlation is at least this; else the other inputs and the calendar's cycles together"},
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
         {"field": "basis", "value": EXTRA_ROWS, "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, and every input): with two inputs 16 rows on a monthly or weekly table, 22 on a daily, 45 on an hourly; fewer is said as too short"},
         {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate, from the history drawn again 300 times in runs of neighbouring rows (a day's rows on a table finer than daily, 14 rows on a daily one, 8 on a weekly, 3 on a monthly, and never more than a tenth of the history, so that there are at least ten runs to draw from); a range between two estimates has no stated coverage"},
-        {"field": "basis", "value": "the farthest any history row lies from its nearest neighbour", "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where no history row lies nearer to it than that, each input scaled by its spread in the history"},
+        {"field": "basis", "value": REACH, "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where it lies farther from every history row than the distance within which this share of history rows find a nearest neighbour, each input scaled by its spread in the history (before 2026-10-17 the loneliest row set the reach, and one mis-keyed row disarmed the check)"},
+        {"field": "basis", "value": BEYOND_SHARE, "basis": "assumed: the plan or the change goes beyond together where more than this share of the periods ahead lie past the reach: one odd period among thirteen does not say so, two do"},
     ]

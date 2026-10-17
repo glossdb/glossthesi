@@ -61,6 +61,51 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
         assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
 
 
+def test_a_change_that_points_both_ways_over_the_periods_ahead_is_said_so_and_is_not_no_effect():
+    # y answers x upward and z downward; the scenario raises x in the first four periods and z in the last nine. The
+    # mean of the history's estimate nets to about nothing, and read on the mean alone the answer was `0`, "no effect
+    # visible", while every period showed an effect. The sign is the horizon's as a whole, and the periods are said.
+    rng = np.random.default_rng(21)
+    stamps = _weekly(periods=160)[0]
+    x, z = rng.uniform(0, 1, 160), rng.uniform(0, 1, 160)
+    y = 50.0 + 2.0 * x - 0.9 * z + rng.normal(0, 0.3, 160)
+    starts = whatif.places(rng)
+    m = _member(stamps, y, {"x": x, "z": z}, "x")
+    m.scenario = {"x": m.plan["x"].copy(), "z": m.plan["z"].copy()}
+    m.scenario["x"][:4] = np.minimum(m.plan["x"][:4] + 0.3, x[:147].max())
+    m.scenario["z"][4:] = np.minimum(m.plan["z"][4:] + 0.3, z[:147].max())
+    plan = np.full(13, 50.0)
+    got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.01, starts)
+    assert got["sign"] == "?" and "points both ways" in got["basis"] and "4 up, 9 down" in got["basis"] and "nets to nothing" in got["basis"]
+    assert (got["history_value"][:4] > plan[:4]).all() and (got["history_value"][4:] < plan[4:]).all()
+    # Raise x in the first ten periods instead: the horizon's mean is up, the sign is stated, and the periods are said.
+    m.scenario["x"], m.scenario["z"] = m.plan["x"].copy(), m.plan["z"].copy()
+    m.scenario["x"][:10] = np.minimum(m.plan["x"][:10] + 0.3, x[:147].max())
+    m.scenario["z"][10:] = np.minimum(m.plan["z"][10:] + 0.3, z[:147].max())
+    got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.4, starts)
+    assert got["sign"] == "+" and "10 up, 3 down" in got["basis"] and "the horizon's as a whole" in got["basis"]
+    # One lever raised in every period keeps its sign, as before.
+    assert whatif.reading(_member(stamps, y, {"x": x, "z": z}, "x"), "y", "x", plan, plan, plan + 0.4, starts)["sign"] == "+"
+
+
+def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_spread():
+    # A column climbing from 100 to 1,000 with a residual spread of 10 and an input it does not answer: the whole spread
+    # is 260, so a model shift of 25 (2.5 residual spreads) passed as "still" before; now it is a move.
+    rng = np.random.default_rng(11)
+    stamps = _weekly(periods=200)[0]
+    x = rng.uniform(0, 1, 200)
+    y = np.linspace(100, 1000, 200) + rng.normal(0, 10, 200)
+    starts = whatif.places(rng)
+    read = whatif.history(stamps, y, np.column_stack([x]), starts)
+    assert 7 < read["residual_sd"] < 13 and whatif.spread(y) > 200
+    m = _member(stamps, y, {"x": x}, "x")
+    plan = np.full(13, 1000.0)
+    moved = whatif.reading(m, "y", "x", plan, plan, plan + 25.0, starts)
+    still = whatif.reading(m, "y", "x", plan, plan, plan + 0.5, starts)
+    assert moved["sign"] == "?" and moved["basis"].endswith("and the model moves it")
+    assert still["sign"] == "0" and "what the history leaves" in still["basis"]
+
+
 def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
     # Promotions only on weekdays, sales higher on weekdays anyway: the day of the week must be held.
     rng = np.random.default_rng(3)
@@ -171,6 +216,13 @@ def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up(
     # A continuous pair: a corner the history never visited is beyond, a point among the rows is not.
     cloud = rng.normal(size=(300, 2))
     assert whatif.beyond_together(cloud, np.array([[6.0, 6.0]])) and not whatif.beyond_together(cloud, np.array([[0.3, -0.2]]))
+    # One mis-keyed history row (a price of 40) no longer sets the reach: the corner is still beyond.
+    assert whatif.beyond_together(np.vstack([cloud, [[0.0, 40.0]]]), np.array([[6.0, 6.0]]))
+    # One odd period among thirteen does not fire the check; two do; a plan drawn from the history itself does not.
+    ordinary = cloud[rng.choice(300, 13, replace=False)]
+    assert not whatif.beyond_together(cloud, ordinary)
+    assert not whatif.beyond_together(cloud, np.vstack([ordinary[:12], [[6.0, 6.0]]]))
+    assert whatif.beyond_together(cloud, np.vstack([ordinary[:11], [[6.0, 6.0], [6.0, -6.0]]]))
     # The parts of a joint reading add up to its estimate and equal the single readings.
     stamps, y, x, z = _weekly()
     starts = whatif.places(np.random.default_rng(1))

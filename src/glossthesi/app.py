@@ -614,8 +614,10 @@ class Whatif:
                 raise Refusal(f"member `{member}`: a period ahead that is not after its last actual row — the history comes first")
             h = len(planned)
             actual = actual[-whatif.CONTEXT :]
-            if len(actual) < whatif.MIN_HISTORY + h:
-                errors.append({"member": member, "error": f"{len(actual)} actual periods: {h} ahead need {whatif.MIN_HISTORY + h} behind them"})
+            need = whatif.rows_needed(stamps[actual], len(inputs))
+            if len(actual) < need + h:
+                why = f" on this grain with {len(inputs)} inputs" if need > whatif.MIN_HISTORY else ""
+                errors.append({"member": member, "error": f"{len(actual)} actual periods: {h} ahead need {need + h} behind them{why}"})
                 continue
             members.append(
                 whatif.Member(member, stamps[actual], stamps[planned], {t: values[t][actual] for t in targets}, {c: values[c][actual] for c in inputs},
@@ -658,7 +660,7 @@ class Whatif:
             return out
 
         periods = plan.table.column("period")
-        names = ("member", "period", "column", "status", "level", "value", "actual", "history_value", "history_low", "history_high", "sign", "confidence", "basis", "explains", "error")
+        names = ("member", "period", "column", "status", "level", "value", "actual", "history_value", "history_low", "history_high", "sign", "confidence", "basis", "explains", "error", "history_error")
         cols: dict[str, list] = {name: [] for name in names}
         parts: list[dict] = []  # per member, column and changed input: what that input alone does, by the history
         for i, t, three, said in await run_in_threadpool(read):
@@ -684,6 +686,7 @@ class Whatif:
             cols["basis"] += [said["basis"]] * n
             cols["explains"] += [said["explains"]] * n
             cols["error"] += [said["error"]] * n
+            cols["history_error"] += [said["history_error"]] * n
         text = ("member", "column", "status", "sign", "confidence", "basis")
         table = pa.table(
             {name: wire.taken(periods, cols[name]) if name == "period" else pa.array(cols[name], type=pa.string()) if name in text else pa.array(np.asarray(cols[name], dtype=np.float64), from_pandas=True) for name in names}

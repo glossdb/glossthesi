@@ -620,6 +620,8 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     # Beside the model's value, the history's own estimate of the scenario with its interval: the plan plus what the history says the change does.
     assert all(abs(s["history_value"] - p["value"] - 2.0) < 0.3 and s["history_low"] < s["history_value"] < s["history_high"] and p["history_value"] is None for s, p in zip(scenario, plan))
     assert scenario[0]["explains"] > 0.8 and 0 < scenario[0]["error"] < 1.5 and [row["period"] for row in scenario] == _weeks(64)[-4:]
+    # What the history leaves of y, the error its estimate is read against: the noise of 0.3 the series was made with.
+    assert 0.2 < scenario[0]["history_error"] < 0.45 and held[0]["history_error"] == scenario[0]["history_error"]
     # A member whose history shows nothing, and the model moves nothing: no effect visible, which is not "no effect".
     still = _rows(answer, member="b", status="scenario", level=0.5)
     assert {row["sign"] for row in still} == {"0"} and still[0]["confidence"] == "no effect visible" and still[0]["history_low"] < still[0]["value"] < still[0]["history_high"]
@@ -659,6 +661,17 @@ def test_a_member_or_a_target_that_cannot_be_read_fails_alone(client):
     assert {"member": "short", "error": "15 actual periods: 4 ahead need 30 behind them"} in errors
     assert {"member": "under", "column": "y", "error": "a level under zero"} in errors
     assert {row["member"] for row in _rows(r.json())} == {"a"}
+
+
+def test_a_member_too_short_for_its_grain_fails_alone_with_the_number_it_needs(client):
+    # Hourly, two inputs: the history's reading holds 37 columns (a level, a trend, four for the year, six weekdays,
+    # 23 hours, two inputs) and needs eight more rows, 45; 40 rows passed the flat gate of 26 and failed inside the reading.
+    hours = [str(np.datetime64("2024-03-04T00:00") + np.timedelta64(i, "h")) for i in range(42)]
+    table = {"member": ["a"] * 44, "period": hours + hours[40:], "status": ["actual"] * 40 + ["plan"] * 2 + ["scenario"] * 2,
+             "y": [50.0 + (i % 5) for i in range(40)] + [None] * 4, "x": [float(i % 2) for i in range(40)] + [0.0, 0.0, 1.0, 1.0], "z": [float(i % 3) for i in range(44)]}  # fmt: skip
+    r = client.send("/whatif", WHATIF, table)
+    assert r.status_code == 200, r.text
+    assert r.json()["answer"]["errors"] == [{"member": "a", "error": "40 actual periods: 2 ahead need 47 behind them on this grain with 2 inputs"}]
 
 
 def test_the_whatif_takes_arrow_with_dates_and_answers_the_same(client):

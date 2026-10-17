@@ -26,7 +26,11 @@ Decided on 2026-10-01:
   and the history's own estimate are both returned. The model errs
   low more often than high.
 - **The error, measured on the caller's own table.** The last periods
-  of the history are held back, predicted and compared.
+  of the history are held back, predicted and compared: the error of
+  the level, one window. Beside it, what the history leaves of the
+  column once the level, the trend, the calendar and the inputs are
+  held: the spread the history's estimate of the change is read
+  against (`history_error`).
 - **"No effect visible" is not "no effect".** It says that this
   member's data does not show one.
 
@@ -67,7 +71,18 @@ Every member is read on its own, and every target on its own
 3. **The sign.** `+` or `-` where both readings point the same way
    with neither interval over zero, and the model's shift goes that
    way. `0` where the history shows nothing and the model's shift is
-   under a tenth of the column's spread. `?` otherwise, with the
+   under a tenth of what the history's regression leaves of the
+   column, its residual spread (since 2026-10-17; before, a tenth of
+   the column's whole spread, which on a trending column is mostly
+   the trend, so that a shift of several residual spreads passed as
+   none). The sign is the horizon's as a whole, the mean change over
+   the periods ahead. Where the history's estimate is off zero upward
+   in some periods and downward in others (two levers moving in
+   different periods, a change that reverses) the reason says so
+   beside the sign, with the counts, and the per-period numbers stand;
+   where such a change nets to nothing over the horizon the answer is
+   `?` and says so, not `0` (since 2026-10-17; before, it read as no
+   effect visible). `?` otherwise, with the
    reason: the two disagree; the input never varied; it cannot be
    told apart from another input; the change, or the input as planned,
    goes beyond what the history holds; the history is too short.
@@ -174,6 +189,21 @@ A table of one series or a few is cut at several dates, one horizon
 apart; those answers share most of their history and count for less
 than their number.
 
+**Run of 2026-10-17, development tables, after the still rule moved
+to the residual spread** (step 3.2 of the plan of that day). A sign on
+117 as before, and the model agrees on 93% of 126 as before. No effect
+visible on 41 where it was 64; not answerable on 61 where it was 38;
+where the history shows nothing the model stays still on 58% of 71,
+against 90% at a tenth of the column's whole spread. The difference
+is two tables: Rossmann's school holiday, where 14 of 34 answers that
+were "no effect visible" are now "the model moves it", and the hourly
+load's temperature and radiation, 14 of 17. There the model answers a
+change the history's straight line does not show on both readings;
+at a tenth of the whole spread, which on those columns is many times
+the spread the regression leaves, those moves had passed as none. The
+90% was the threshold's, not the model's. The held-out tables were not
+run (the held-out budget, `../glosstheval/docs/evaluation.md`).
+
 ## Candidates behind the three predictions
 
 On 2026-10-16 two forecasting models, Timestral-209M and t0-gamma,
@@ -215,18 +245,28 @@ the parts equal the single readings is a property of the code, kept
 by a test, not a finding. And
 several changed inputs are checked together: each may lie inside its
 own range while the history never held the combination (a promotion
-and a holiday that never fell together); where no row of the history
-lies near the scenario's combination, nearer than the loneliest
-history row lies from its own nearest neighbour in that space, the
-route states no sign and says whether the plan or the change goes
-beyond together. The reach is the history's own, with no number to
-choose; it is declared as an assumption on every answer. On the three
-tables the check fires on 5 of 80 series and columns: the German
-market's two forecasts as planned on 4, a change on the hourly load
-on 1, none on Rossmann, where promotion and holiday have fallen
-together; the parts equal the single-lever readings to the digit,
-and the direction holds on all 64 where the history shows the joint
-effect.
+and a holiday that never fell together); where the scenario's
+combination lies farther from every history row than the distance
+within which 99 of 100 history rows find a neighbour in that space,
+in more than a tenth of the periods ahead, the route states no sign
+and says whether the plan or the change goes beyond together. Until
+2026-10-17 the loneliest history row set the reach, with no number
+to choose; the review of that day showed one mis-keyed row disarming
+the check, so the reach is a quantile now and the share of periods
+is what fires it; both are declared on every answer. On the three
+tables the check as first built fired on 5 of 80 series and columns:
+the German market's two forecasts as planned on 4, a change on the
+hourly load on 1, none on Rossmann; the parts equal the single-lever
+readings to the digit, and the direction held on all 64 where the
+history showed the joint effect. With the quantile reach (GK-56 in
+the evaluation's findings) it fires on 22: the German market's 4 as
+before, and 18 of Rossmann's 60 series, the stores where a promotion
+and a school holiday never fell together, which the loneliest-row
+reach had let pass. Where the history shows the joint effect the
+model agrees on 46 of 47, the size 1.06 of the history's; 15 of
+Rossmann's signs say that the history's estimate points both ways
+over the periods ahead, since a store's weeks differ in which lever
+moves, and 3 series whose change nets to nothing answer `?`.
 
 Tested the same day on the three development tables with two inputs
 named (80 series and columns; GK-50 in the evaluation's findings):
