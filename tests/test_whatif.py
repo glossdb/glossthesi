@@ -34,6 +34,33 @@ def test_the_history_gives_the_slope_with_the_other_inputs_and_the_season_held()
     assert np.isnan(whatif.history(stamps[:12], y[:12], np.column_stack([x[:12]]), starts)["slope"]).all()
 
 
+def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
+    # A 5-minute table of 200 rows: the run (a day, 288 rows) is longer than the history; drawn as it was, every
+    # resample was the whole history and a noise slope was "off zero" with an interval of no width.
+    rng = np.random.default_rng(0)
+    stamps = (np.datetime64("2024-01-01T00:00") + np.arange(200) * np.timedelta64(5, "m")).astype("datetime64[ms]")
+    got = whatif.history(stamps, rng.normal(size=200), np.column_stack([rng.normal(size=200)]), whatif.places(rng))
+    lo, hi = np.quantile(got["draws"][:, 0], [0.05, 0.95])
+    assert len(np.unique(np.round(got["draws"][:, 0], 12))) > 100 and lo < 0 < hi
+    # Under no effect, with autocorrelated noise, the 90% interval covers zero about nine times in ten where the cap
+    # bites (30 weekly rows: 35 of 40, where it was 31) and where it does not (400 daily rows: 34 of 40, as before).
+    # On 1,000 hourly rows with autocorrelation 0.97 the rows reading covers about 28 of 40: a run of a day is shorter
+    # than that dependence, which the cap does not touch (docs/whatif.md, where it is weak).
+    def ar(n, rho):
+        e, out = rng.normal(size=n), np.zeros(n)
+        for t in range(1, n):
+            out[t] = rho * out[t - 1] + e[t]
+        return out
+    for first, step, n, rho in (("2019-01-06", np.timedelta64(7, "D"), 30, 0.5), ("2021-01-04", np.timedelta64(1, "D"), 400, 0.9)):
+        stamps = (np.datetime64(first) + np.arange(n) * step).astype("datetime64[ms]")
+        covers = 0
+        for _ in range(40):
+            got = whatif.history(stamps, 50 + 2 * ar(n, rho), np.column_stack([ar(n, rho)]), whatif.places(rng))
+            lo, hi = np.quantile(got["draws"][:, 0], [0.05, 0.95])
+            covers += lo <= 0 <= hi
+        assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
+
+
 def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
     # Promotions only on weekdays, sales higher on weekdays anyway: the day of the week must be held.
     rng = np.random.default_rng(3)

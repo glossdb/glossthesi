@@ -60,7 +60,10 @@ Every member is read on its own, and every target on its own
    It is read twice, on the rows and on their changes from one row to
    the next; a drift two columns merely share shows only in the
    first. The history is drawn again 300 times in runs of
-   neighbouring rows for a 90% interval.
+   neighbouring rows for a 90% interval; a run is at most a tenth of
+   the history, so that there are runs to draw from (a run as long as
+   the history gave the history back 300 times and an interval of no
+   width, found on a 5-minute table in the review of 2026-10-17).
 3. **The sign.** `+` or `-` where both readings point the same way
    with neither interval over zero, and the model's shift goes that
    way. `0` where the history shows nothing and the model's shift is
@@ -239,6 +242,22 @@ moves anyway, as it does there with one input. The German market's
 two forecasts show an effect each and none together, their estimates
 pulling apart, and the route states no sign: the right answer to a
 pair that cancels.
+
+## Where the history's interval is weak
+
+The 90% interval of the history's slope comes from the history drawn
+again in runs of neighbouring rows. Under no effect and autocorrelated
+noise it covers zero on about 35 of 40 synthetic series on 30 weekly
+rows (31 of 40 before the run was capped at a tenth of the history)
+and 34 of 40 on 400 daily rows; on 1,000 hourly rows whose noise
+carries over at 0.97 from one hour to the next it covers 28 of 40 on
+the rows and 36 of 40 on their changes: a run of a day is shorter
+than that dependence (Künsch 1989; Politis and White 2004 on the
+block length). The sign, which needs both readings off zero the same
+way, fires on 2 to 9% of such series where 10% is the most it should.
+The run length per grain is declared in `assumptions`; a longer run
+or a random one (Politis and Romano 1994) is step 3 of the plan of
+2026-10-17.
 
 ## Not covered
 
