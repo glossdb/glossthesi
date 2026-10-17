@@ -16,8 +16,13 @@ Every member is read on its own, and every target on its own.
   summed the same way, so an interaction between two inputs is not
   something the history reads.
 - The sign is stated where the two agree: the history shows the
-  input, or the inputs together, moving the target, and the model
-  moves it the same way.
+  target higher where the input, or the inputs together, was higher,
+  and the model moves it the same way. Both read the same history
+  with the same features (the calendar and the inputs), so their
+  agreement says the association holds under a linear and under a
+  flexible fit; it does not say the input causes the change. That the
+  nothing which set the input also moved the target is the caller's
+  assumption, declared on every answer (`assumptions`).
 
 The route promises that direction and no size. The model's shift
 and the history's estimate are both returned; the size lies
@@ -106,7 +111,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
     run = run_of_rows(minutes(stamps)) if run is None else run
     x, seen = full[keep], y[keep]
     varies = np.std(x[:, held:], axis=0) > 0 if len(seen) else np.zeros(k, dtype=bool)
-    if len(seen) < x.shape[1] + 8 or not varies.any():
+    if len(seen) < x.shape[1] + EXTRA_ROWS or not varies.any():
         return out
 
     def rows(b: int, length: int) -> np.ndarray:
@@ -132,7 +137,7 @@ def history(stamps: np.ndarray, y: np.ndarray, inputs: np.ndarray, starts: np.nd
     dx, dy = np.column_stack([full[1:, :held], np.diff(full[:, held:], axis=0)]), np.diff(y)
     keep = ~np.isnan(dy) & ~np.isnan(dx).any(axis=1)
     dx, dy = dx[keep], dy[keep]
-    moving = varies & (np.std(dx[:, held:], axis=0) > 0) if len(dy) >= dx.shape[1] + 8 else np.zeros(k, dtype=bool)
+    moving = varies & (np.std(dx[:, held:], axis=0) > 0) if len(dy) >= dx.shape[1] + EXTRA_ROWS else np.zeros(k, dtype=bool)
     if moving.any():
         slopes_c[moving] = np.linalg.lstsq(dx, dy, rcond=None)[0][held:][moving]
     for b in range(RESAMPLES):
@@ -252,7 +257,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     # An input that is the same as planned for this member is not changed for it; none changed is no change.
     differs = [c for c in changed if (deltas[c][~np.isnan(deltas[c])] != 0).any()]
     if not differs:
-        return out | {"sign": "0", "basis": ("the input is" if len(changed) == 1 else "the inputs are") + " the same as planned and under the scenario for this member"}
+        return out | {"sign": "=", "basis": ("the input is" if len(changed) == 1 else "the inputs are") + " the same as planned and under the scenario for this member: nothing is changed"}
     changed = differs
     one = len(changed) == 1
     name = (lambda c: "the input") if one else (lambda c: f"the input `{c}`")  # noqa: E731
@@ -321,14 +326,25 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
     ]
     # The history shows the change moving the column: both readings the same way, neither interval over zero.
     shows = (lo > 0 and lo_c > 0) or (hi < 0 and hi_c < 0)
+    what = "the input" if one else "the inputs together"
     if shows:
         way = np.sign(slopes @ moved)
         if np.sign(shift) == way and way != 0:
-            return say("the history shows the input moving the column, on the rows and on their changes, and the model moves it the same way" if one else "the history shows the inputs together moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
+            return say(f"the history shows {what} moving the column, on the rows and on their changes, and the model moves it the same way", sign="+" if way > 0 else "-")
         return say("the model and the history disagree on the direction")
+    # One reading off zero and the other not is said as such: it is not the same as neither showing anything.
+    on_rows, on_changes = lo > 0 or hi < 0, lo_c > 0 or hi_c < 0
+    if on_rows and not on_changes:
+        said = f"the history shows no effect of {what} that holds on both readings (the rows show it moving the column, their changes from row to row do not)"
+    elif on_changes and not on_rows:
+        said = f"the history shows no effect of {what} that holds on both readings (the changes from row to row show it moving the column, the rows do not)"
+    elif on_rows and on_changes:
+        said = f"the history shows no effect of {what} that holds on both readings (the rows and their changes point opposite ways)"
+    else:
+        said = f"the history shows no effect of {what} on the column"
     if abs(shift) < STILL * spread(y):
-        return say(("the history shows no effect of the input on the column" if one else "the history shows no effect of the inputs together on the column") + ", and the model moves it by less than a tenth of its spread", sign="0")
-    return say(("the history shows no effect of the input on the column" if one else "the history shows no effect of the inputs together on the column") + ", and the model moves it")
+        return say(said + ", and the model moves it by less than a tenth of its spread", sign="0")
+    return say(said + ", and the model moves it")
 
 
 def _tied(member: Member, changed: str, read: list[str]) -> str:
@@ -342,19 +358,28 @@ def _tied(member: Member, changed: str, read: list[str]) -> str:
             r = abs(float(np.corrcoef(x[both], v[both])[0, 1]))
             if r > best:
                 best, name = r, other
-    return f"the input `{name}`" if best >= 0.9 else "the other inputs and the calendar's cycles"
+    return f"the input `{name}`" if best >= TIED else "the other inputs and the calendar's cycles"
 
 
-CONFIDENCE = {"+": "direction", "-": "direction", "0": "no effect visible", "?": "not answerable"}
+CONFIDENCE = {"+": "direction", "-": "direction", "0": "no effect visible", "?": "not answerable", "=": "unchanged"}
+TIED = 0.90  # the correlation at which an input is said to follow another by name
+EXTRA_ROWS = 8  # the rows the history's regression needs beyond the columns it holds
 
 
 def assumptions() -> list[dict]:
-    """What the sign rests on that the model did not produce."""
+    """What the sign rests on that the model did not produce, and what
+    the caller supplies: the two estimates read one history, so the
+    sign is an association in that history, and whether the input
+    caused the change rests on nothing in the table having set the
+    input and moved the column at once."""
     return [
+        {"field": "sign", "value": "no confounding", "basis": "assumed: nothing that set the input also moved the column, beyond the other inputs and the calendar's cycles, which are held. The model and the history's regression read the same rows with the same features, so their agreement is one piece of evidence: the association holds under a linear and under a flexible fit. It is read for the same period; a lag of the input is not held (docs/whatif.md)"},
         {"field": "sign", "value": INTERVAL, "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)"},
-        {"field": "sign", "value": STILL, "basis": "measured: where the history showed no effect, the model's shift stayed under a tenth of the column's spread on 91% of 17,179 tested series (docs/whatif.md)"},
+        {"field": "sign", "value": STILL, "basis": "assumed: a shift under this share of the column's whole spread counts as none. Given it, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect (docs/whatif.md); that measures the model's stillness at this threshold, not the threshold"},
         {"field": "basis", "value": SEPARABLE, "basis": "assumed: the share of an input's variation the other inputs and the calendar have to leave for it to be told apart"},
+        {"field": "basis", "value": TIED, "basis": "assumed: an input that is not told apart is said to follow another input by name where their correlation is at least this; else the other inputs and the calendar's cycles together"},
         {"field": "basis", "value": MOSTLY_EMPTY, "basis": "assumed: an input empty in more than half of the history's rows is not read; an empty cell is taken as unknown, not as zero"},
-        {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate; a range between two estimates has no stated coverage"},
+        {"field": "basis", "value": EXTRA_ROWS, "basis": "assumed: the history's regression needs this many rows more than the columns it holds (a level, a trend, four for the year's cycle, six for the weekday on a daily or finer table, 23 for the hour on a finer one, and every input): with two inputs 16 rows on a monthly or weekly table, 22 on a daily, 45 on an hourly; fewer is said as too short"},
+        {"field": "history_low", "value": INTERVAL, "basis": "assumed: the interval of the history's estimate, from the history drawn again 300 times in runs of neighbouring rows (a day's rows on a table finer than daily, 14 rows on a daily one, 8 on a weekly, 3 on a monthly); a range between two estimates has no stated coverage"},
         {"field": "basis", "value": "the farthest any history row lies from its nearest neighbour", "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where no history row lies nearer to it than that, each input scaled by its spread in the history"},
     ]

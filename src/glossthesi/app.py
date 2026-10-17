@@ -228,14 +228,22 @@ def _door(read):
     return endpoint
 
 
-def _levels(spec: dict[str, Any]) -> list[float]:
+def _spec(field: str, message: str, status: int = 400) -> Refusal:
+    """A specification refused: the message, and the field at fault named for an agent to repair."""
+    return Refusal(message, status, [{"field": field, "error": message}])
+
+
+def _levels(spec: dict[str, Any], grid: tuple[float, float] | None = None) -> list[float]:
+    """The quantile levels asked; with `grid`, the model's own lowest and highest, outside of which a level is refused
+    rather than answered with the grid's edge under the level's name."""
     value = spec.get("levels")
     if not isinstance(value, list) or not value:
-        raise Refusal("`levels` is a non-empty list of quantile levels")
+        raise _spec("levels", "`levels` is a non-empty list of quantile levels")
+    low, high = grid or (0.0, 1.0)
     out = []
     for a in value:
-        if not isinstance(a, (int, float)) or isinstance(a, bool) or not 0.0 < float(a) < 1.0:
-            raise Refusal("every one of `levels` lies strictly between 0 and 1")
+        if not isinstance(a, (int, float)) or isinstance(a, bool) or not (low <= float(a) <= high if grid else 0.0 < float(a) < 1.0):
+            raise _spec("levels", f"every one of `levels` lies between {low:g} and {high:g}, the model's own grid" if grid else "every one of `levels` lies strictly between 0 and 1")
         out.append(float(a))
     return out
 
@@ -285,34 +293,34 @@ class Forecast:
     def parse(table: pa.Table, spec: dict[str, Any]) -> _ForecastPlan:
         targets = spec.get("targets")
         if not isinstance(targets, list) or not targets or any(not isinstance(t, str) for t in targets):
-            raise Refusal("`targets` is a non-empty list of the columns to forecast")
+            raise _spec("targets", "`targets` is a non-empty list of the columns to forecast")
         for t in targets:
             if t in wire.RESERVED or t not in table.column_names:
-                raise Refusal(f"`targets`: the table has no value column `{t}`")
+                raise _spec("targets", f"`targets`: the table has no value column `{t}`")
             if wire.is_category(table.schema.field(t)):
-                raise Refusal(f"`targets`: column `{t}` holds text, and a forecast needs numbers")
+                raise _spec("targets", f"`targets`: column `{t}` holds text, and a forecast needs numbers")
         if len(set(targets)) != len(targets):
-            raise Refusal("`targets` names a column twice")
+            raise _spec("targets", "`targets` names a column twice")
         origins = spec.get("origins")
         if origins is not None and not ((isinstance(origins, int) and not isinstance(origins, bool) and origins >= 1) or (isinstance(origins, list) and origins)):
-            raise Refusal("`origins` is a number of periods to walk, or a non-empty list of periods to forecast from")
+            raise _spec("origins", "`origins` is a number of periods to walk, or a non-empty list of periods to forecast from")
         horizon = spec.get("horizon", 1 if origins is not None else None)
         if not isinstance(horizon, int) or isinstance(horizon, bool) or not 1 <= horizon <= forecast.MAX_HORIZON:
-            raise Refusal(f"`horizon` is how many periods ahead, a whole number from 1 to {forecast.MAX_HORIZON}")
+            raise _spec("horizon", f"`horizon` is how many periods ahead, a whole number from 1 to {forecast.MAX_HORIZON}")
         spans = spec.get("totals", [])
         if not isinstance(spans, list) or any(not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= horizon for n in spans):
-            raise Refusal("`totals` is a list of spans in periods, each from 1 to the horizon")
+            raise _spec("totals", "`totals` is a list of spans in periods, each from 1 to the horizon")
         grain = spec.get("grain", "month")
         if grain not in forecast.GRAINS:
-            raise Refusal(f"`grain` is one of {', '.join(forecast.GRAINS)}")
+            raise _spec("grain", f"`grain` is one of {', '.join(forecast.GRAINS)}")
         width = spec.get("width", 1.0)
         factors = width if isinstance(width, list) else [width]
         if not factors or any(not isinstance(w, (int, float)) or isinstance(w, bool) or not 0 < w < math.inf for w in factors):
-            raise Refusal("`width` is a number above zero, or a list of one per period of the horizon")
+            raise _spec("width", "`width` is a number above zero, or a list of one per period of the horizon")
         if isinstance(width, list) and len(width) != horizon:
-            raise Refusal(f"`width`: {len(width)} factors for a horizon of {horizon}")
+            raise _spec("width", f"`width`: {len(width)} factors for a horizon of {horizon}")
         width = np.array(width, dtype=np.float64) if isinstance(width, list) else float(width)
-        levels = _levels(spec)
+        levels = _levels(spec, (forecast.GRID[0], forecast.GRID[-1]))
 
         table, members = wire.by_member(table, "/forecast")
         status = wire.status(table)
@@ -433,8 +441,11 @@ class Forecast:
         for e in errors:
             telemetry.item_failed(caller, "/forecast", e["error"])
         answer: dict[str, Any] = {"errors": errors, "coverage": coverage.held(plan.grain, plan.horizon, plan.spans, plan.levels)}
+        assumptions = [coverage.basis(plan.grain)] if answer["coverage"] else []
         if plan.spans:
-            answer["assumptions"] = [forecast.dependence(plan.grain)]
+            assumptions.append(forecast.dependence(plan.grain))
+        if assumptions:
+            answer["assumptions"] = assumptions
         return table, answer
 
 
@@ -469,19 +480,19 @@ class Misfit:
     def parse(table: pa.Table, spec: dict[str, Any]) -> _MisfitPlan:
         cells = spec.get("cells", False)
         if not isinstance(cells, bool):
-            raise Refusal("`cells` is true or false")
+            raise _spec("cells", "`cells` is true or false")
         folds = spec.get("folds", 1)
         if not isinstance(folds, int) or isinstance(folds, bool) or not 1 <= folds <= 10:
-            raise Refusal("`folds` is a whole number from 1 to 10")
+            raise _spec("folds", "`folds` is a whole number from 1 to 10")
         names = list(table.column_names)
         if len(names) < 2 or table.num_rows < 2:
             raise Refusal(f"the frame is {table.num_rows} rows by {len(names)} columns: a read needs two of each")
         named = spec.get("categorical", [])
         if not isinstance(named, list) or any(not isinstance(c, str) for c in named):
-            raise Refusal("`categorical` is a list of column names")
+            raise _spec("categorical", "`categorical` is a list of column names")
         for c in named:
             if c not in names:
-                raise Refusal(f"`categorical`: the frame has no column `{c}`")
+                raise _spec("categorical", f"`categorical`: the frame has no column `{c}`")
         categorical = {names.index(c) for c in named} | {j for j, c in enumerate(names) if wire.is_category(table.schema.field(c))}
         x = np.full((table.num_rows, len(names)), np.nan)
         for j, name in enumerate(names):
@@ -566,20 +577,20 @@ class Whatif:
     def parse(table: pa.Table, spec: dict[str, Any]) -> _WhatifPlan:
         targets = spec.get("targets")
         if not isinstance(targets, list) or not targets or any(not isinstance(t, str) for t in targets):
-            raise Refusal("`targets` is a non-empty list of the columns to answer for")
+            raise _spec("targets", "`targets` is a non-empty list of the columns to answer for")
         for t in targets:
             if t in wire.RESERVED or t not in table.column_names:
-                raise Refusal(f"`targets`: the table has no value column `{t}`")
+                raise _spec("targets", f"`targets`: the table has no value column `{t}`")
             if wire.is_category(table.schema.field(t)):
-                raise Refusal(f"`targets`: column `{t}` holds text, and the what-if needs numbers")
+                raise _spec("targets", f"`targets`: column `{t}` holds text, and the what-if needs numbers")
         if len(set(targets)) != len(targets):
-            raise Refusal("`targets` names a column twice")
+            raise _spec("targets", "`targets` names a column twice")
         levels = _levels(spec)
 
         table, groups = wire.by_member(table, "/whatif", twice=True)
         status = wire.status(table)
         if (status == "forecast").any():
-            raise Refusal("`status`: /whatif takes `actual` rows, and the periods ahead as `plan` and as `scenario`")
+            raise _spec("status", "`status`: /whatif takes `actual` rows, and the periods ahead as `plan` and as `scenario`")
         stamps = _stamps(table)
         inputs = [c for c in wire.value_columns(table) if c not in targets]
         if not inputs:
