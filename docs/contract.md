@@ -168,7 +168,11 @@ own. The route promises a direction, not a size:
   member's own history shows the column higher where the input was
   higher, the calendar and the other inputs held, and the model
   moves it the same way. It is an association in that history, read
-  for the same period. The two estimates read the same rows with
+  for the same period and the period before: the input's value one
+  period back is held beside it, so what the column does in the
+  period after the input moves has its own slope, and a sustained
+  change's effect is the sum of the two (since 2026-10-17). The two
+  estimates read the same rows with
   the same features, so their agreement is one piece of evidence;
   that nothing which set the input also moved the column is the
   caller's assumption, declared in `assumptions`. No table records
@@ -196,11 +200,12 @@ the weekday and the hour the history's reading holds are UTC's. A
 member has one row per period and status.
 A member needs, behind the periods ahead, 26 actual periods or as
 many as the history's reading holds columns plus eight, whichever is
-more: with two inputs 26 on a monthly or weekly table, 26 on a daily
-one, 45 on an hourly one (the level, the trend, the year's cycle, the
-weekday, the hour and every input); a member with fewer fails alone and
-the error names the number. Its last 4,096 are read. A target's values
-in the rows ahead are ignored.
+more: with two inputs, both changed, 26 on a monthly or weekly table,
+26 on a daily one, 48 on an hourly one (the level, the trend, the
+year's cycle, the weekday, the hour, every input, and one lag of each
+changed input, which also costs the first row); a member with fewer
+fails alone and the error names the number. Its last 4,096 are read.
+A target's values in the rows ahead are ignored.
 
 An input is a number; a yes-or-no column is read as 1 and 0, and a
 text column as whether there is an entry (a holiday's name).
@@ -232,11 +237,13 @@ one would show as a disagreement.
 a list in the table's order, and `parts`, beside `errors` and
 `assumptions`: per member, column and changed input, what that input
 alone does to the column over the periods ahead by the member's
-history (`history_shift`, the mean over the periods, with
-`history_low` and `history_high`, its 90% interval), from the same
-regression as the joint estimate, so that the parts' estimates add
-up to it; their intervals do not add, and the joint interval is the
-one to read. A user reads the single levers and the pair in one
+history (`history_shift`, the mean over the periods, the lag's part
+included, with `history_low` and `history_high`, its 90% interval),
+from the same regression as the joint estimate, so that the parts'
+estimates add up to it; their intervals do not add, and the joint
+interval is the one to read. The joint regression holds the lag of
+every changed input, so a part differs from the single-input reading
+of the same lever by a little. A user reads the single levers and the pair in one
 picture: which lever carries the effect, and when two cancel.
 
 Several changed inputs are also checked together: each may lie
@@ -259,7 +266,7 @@ and level.
 | `status` | `held_back`: the last periods of the history, as many as there are ahead, predicted from the rows before them. `plan`: the periods ahead, inputs as planned. `scenario`: the same under the change. |
 | `level`, `value` | The quantile level and the model's quantile. |
 | `actual` | On `held_back` rows, what was recorded. The same on every level row of the point. |
-| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus what the member's own history says the change does at that period, and the 90% interval of that. The other inputs, the trend and the calendar's cycles are held. The same on every level row of the point. |
+| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus what the member's own history says the change does at that period, from the change made there and the change made the period before (the input's lag, held since 2026-10-17; nothing from before the first period ahead, whose row before is history), and the 90% interval of that. The other inputs, the trend and the calendar's cycles are held. The same on every level row of the point. |
 
 And per member and column, the same on each of its rows:
 

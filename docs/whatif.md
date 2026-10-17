@@ -19,9 +19,10 @@ Decided on 2026-10-01:
   agree: the member's own history shows the column higher where the
   input was higher, the calendar and the other inputs held, and the
   model moves it the same way. It is an association in that history,
-  read for the same period; whether the input caused it rests on the
-  caller's assumption that nothing which set the input also moved the
-  column, declared on every answer.
+  read for the same period and the period before (one lag of the
+  input is held, since 2026-10-17); whether the input caused it rests
+  on the caller's assumption that nothing which set the input also
+  moved the column, declared on every answer.
 - **The size as a guess between two estimates.** The model's shift
   and the history's own estimate are both returned. The model errs
   low more often than high.
@@ -39,9 +40,9 @@ not changed. So the direction cannot be scored against a truth; the
 agreement of the two estimates is the evidence there is, and it is
 one piece of evidence, not two. The model reads the same rows with
 the same features as the regression (the calendar's cycles and the
-inputs; TabICL's forecaster holds no lagged target), so their
-agreement says the association holds under a linear and under a
-flexible fit. A lever set by something that also moved the column (a
+inputs; TabICL's forecaster holds no lagged target, and the lag of
+the changed input is the regression's alone), so their agreement
+says the association holds under a linear and under a flexible fit. A lever set by something that also moved the column (a
 promotion scheduled when demand was expected high) gets a confident
 sign from both, and the wrong one where the lever's own effect goes
 the other way; on synthetic series with such a lever the review of
@@ -60,7 +61,19 @@ Every member is read on its own, and every target on its own
    ahead. The weights are the ones the service already holds.
 2. **The history is read** for how the target moved with the changed
    input: a slope, with the other inputs, the trend, the year's cycle
-   and, by grain, the day of the week and the hour of the day held.
+   and, by grain, the day of the week and the hour of the day held,
+   and beside it the input's value one period before (`LAG`): what
+   the column does in the period after the input moves, a dip after a
+   promotion or a price's carry-over, has its own slope, and a
+   sustained change's effect is the sum of the two. The history's
+   estimate for a period ahead is the change made there times the
+   first slope plus the change made the period before times the
+   second; the first period ahead has only the first, its row before
+   being history. Where the lag's slope is off zero on both readings
+   the reason says whether the effect carries into the period after
+   or the column moves back then. Before 2026-10-17 the same-period
+   slope stood alone, and could state the sign of a sustained change
+   wrong where the period after undoes it.
    It is read twice, on the rows and on their changes from one row to
    the next; a drift two columns merely share shows only in the
    first. The history is drawn again 300 times in runs of
@@ -315,9 +328,10 @@ with it; an interaction between two changed inputs.
   negative-control columns the lever cannot touch, a permuted lever
   as the chance line, decreases beside increases; then data with a
   truth.
-- **One lag of the input in the history's reading** (step 3): the
-  same-period slope misses a dip after a promotion and a price's
-  carry-over, and can state the sign of a sustained change wrong.
+- **More lags of the input**, where one period after is not where
+  the carry-over ends (a daily table, a month's price). One lag is
+  held since 2026-10-17; how often it shows is in the record of that
+  day.
 - **Trial data** as the history for a what-if.
 - **A model trained on interventions.** CausalLongPFN (Zare et al.,
   arXiv 2606.05797, 2026) takes a history and a planned future input,

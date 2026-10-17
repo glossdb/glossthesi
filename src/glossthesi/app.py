@@ -614,9 +614,10 @@ class Whatif:
                 raise Refusal(f"member `{member}`: a period ahead that is not after its last actual row — the history comes first")
             h = len(planned)
             actual = actual[-whatif.CONTEXT :]
-            need = whatif.rows_needed(stamps[actual], len(inputs))
+            moved_here = sum(1 for c in inputs if not ((values[c][planned] == values[c][changed]) | (np.isnan(values[c][planned]) & np.isnan(values[c][changed]))).all())
+            need = whatif.rows_needed(stamps[actual], len(inputs), moved_here)
             if len(actual) < need + h:
-                why = f" on this grain with {len(inputs)} inputs" if need > whatif.MIN_HISTORY else ""
+                why = f" on this grain with {len(inputs)} inputs, {moved_here} changed" if need > whatif.MIN_HISTORY else ""
                 errors.append({"member": member, "error": f"{len(actual)} actual periods: {h} ahead need {need + h} behind them{why}"})
                 continue
             members.append(
