@@ -68,7 +68,7 @@ def parse(content_type: str, raw: bytes, cap: int | None = None) -> Request:
                 batches.append(batch)
             table = pa.Table.from_batches(batches, reader.schema)
         except (pa.ArrowException, ValueError) as e:
-            raise Refusal(f"the body is not an Arrow IPC stream: {e}")
+            raise Refusal(f"the body is not an Arrow IPC stream: {e}") from e
         meta = table.schema.metadata or {}
         if SPEC not in meta:
             raise Refusal("the schema's metadata holds no `spec`: the specification goes there as JSON")
@@ -79,7 +79,7 @@ def parse(content_type: str, raw: bytes, cap: int | None = None) -> Request:
         try:
             body = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise Refusal(f"the body is not JSON: {e}")
+            raise Refusal(f"the body is not JSON: {e}") from e
         if not isinstance(body, dict):
             raise Refusal("the body is a JSON object with `spec` and `table`")
         spec = body.get("spec")
@@ -101,7 +101,7 @@ def _object(text: bytes | str, name: str) -> dict:
     try:
         value = json.loads(text)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise Refusal(f"{name} is not JSON: {e}")
+        raise Refusal(f"{name} is not JSON: {e}") from e
     if not isinstance(value, dict):
         raise Refusal(f"{name} is a JSON object")
     return value
@@ -119,7 +119,7 @@ def _from_json(columns: Any) -> pa.Table:
         try:
             arrays[name] = pa.array(values)
         except (pa.ArrowException, TypeError, ValueError) as e:
-            raise Refusal(f"`table`: column `{name}` mixes kinds of values: {e}")
+            raise Refusal(f"`table`: column `{name}` mixes kinds of values: {e}") from e
     if len(lengths) != 1:
         raise Refusal("`table`: every column holds the same number of values")
     return pa.table(arrays)
@@ -190,7 +190,7 @@ def numeric(table: pa.Table, name: str) -> np.ndarray:
     try:
         cast = _plain(column).cast(pa.float64())
     except (pa.ArrowException, TypeError) as e:
-        raise Refusal(f"column `{name}` is not numeric ({column.type}): {e}")
+        raise Refusal(f"column `{name}` is not numeric ({column.type}): {e}") from e
     return np.asarray(cast.to_numpy(zero_copy_only=False), dtype=np.float64)
 
 
@@ -202,7 +202,7 @@ def categories(table: pa.Table, name: str) -> np.ndarray:
     try:
         cast = _plain(column).cast(pa.string())
     except (pa.ArrowException, TypeError) as e:
-        raise Refusal(f"column `{name}` cannot be read as text ({column.type}): {e}")
+        raise Refusal(f"column `{name}` cannot be read as text ({column.type}): {e}") from e
     return np.array(["" if v is None else v for v in cast.to_pylist()], dtype=object)
 
 
@@ -231,11 +231,11 @@ def by_member(table: pa.Table, route: str, twice: bool = False) -> tuple[pa.Tabl
         try:
             table = table.set_column(table.schema.get_field_index("member"), "member", table.column("member").cast(pa.string()))
         except (pa.ArrowException, TypeError) as e:
-            raise Refusal(f"`member` cannot be read as text ({table.column('member').type}): {e}")
+            raise Refusal(f"`member` cannot be read as text ({table.column('member').type}): {e}") from e
     try:
         table = table.sort_by([("member", "ascending"), ("period", "ascending")])
     except pa.ArrowException as e:
-        raise Refusal(f"the rows cannot be ordered by `member` and `period`: {e}")
+        raise Refusal(f"the rows cannot be ordered by `member` and `period`: {e}") from e
     members = categories(table, "member")
     if (members == "").any():
         raise Refusal("`member` is missing on some rows")

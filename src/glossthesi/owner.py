@@ -18,9 +18,10 @@ import os
 import threading
 import time
 from collections import OrderedDict, deque
+from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from . import telemetry
 
@@ -122,7 +123,7 @@ class Owner:
             try:
                 with telemetry.span("owner.cycle", kind=job.kind, jobs=1):
                     job.future.set_result(job.run(self._kernels_get()))
-            except BaseException as e:  # the owner must outlive any one job
+            except BaseException as e:  # noqa: BLE001 — the owner must outlive any one job
                 failed = True
                 if not job.future.done():
                     job.future.set_exception(e)

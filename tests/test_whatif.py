@@ -42,6 +42,7 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
     got = whatif.history(stamps, rng.normal(size=200), np.column_stack([rng.normal(size=200)]), whatif.places(rng))
     lo, hi = np.quantile(got["draws"][:, 0], [0.05, 0.95])
     assert len(np.unique(np.round(got["draws"][:, 0], 12))) > 100 and lo < 0 < hi
+
     # Under no effect, with autocorrelated noise, the 90% interval covers zero about nine times in ten where the cap
     # bites (30 weekly rows: 35 of 40, where it was 31) and where it does not (400 daily rows: 34 of 40, as before).
     # On 1,000 hourly rows with autocorrelation 0.97 the rows reading covers about 28 of 40: a run of a day is shorter
@@ -51,6 +52,7 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
         for t in range(1, n):
             out[t] = rho * out[t - 1] + e[t]
         return out
+
     for first, step, n, rho in (("2019-01-06", np.timedelta64(7, "D"), 30, 0.5), ("2021-01-04", np.timedelta64(1, "D"), 400, 0.9)):
         stamps = (np.datetime64(first) + np.arange(n) * step).astype("datetime64[ms]")
         covers = 0
@@ -131,7 +133,11 @@ def test_a_reading_that_holds_on_the_rows_alone_is_said_as_such_and_an_unchanged
     got = whatif.reading(m, "y", "x", plan, plan, plan, starts)
     assert got["sign"] in "0?" and "no effect" in got["basis"] and "both readings" in got["basis"] and "disagree" not in got["basis"]
     # An input the same as planned and under the scenario for this member is `=`, unchanged: not "no effect visible".
-    same = whatif.reading(m, "y", "x", plan, plan, plan, starts) if False else whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
+    same = (
+        whatif.reading(m, "y", "x", plan, plan, plan, starts)
+        if False
+        else whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
+    )
     assert same["sign"] == "=" and whatif.CONFIDENCE["="] == "unchanged" and "same as planned" in same["basis"]
     # Every threshold the reading uses is declared on the answer.
     declared = {a["value"] for a in whatif.assumptions() if not isinstance(a["value"], str)}
@@ -197,7 +203,7 @@ def test_several_inputs_changed_at_once_are_read_as_the_sum_of_what_each_does():
     both = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 1.0, starts)
     # The history's estimate of the joint change is the sum of the two single estimates, to the digit.
     assert np.allclose(both["history_value"] - plan, (alone["x"]["history_value"] - plan) + (alone["z"]["history_value"] - plan))
-    assert both["sign"] in "+-0?" and "the inputs together" in both["basis"] or both["basis"].startswith("the model and the history disagree")
+    assert (both["sign"] in "+-0?" and "the inputs together" in both["basis"]) or both["basis"].startswith("the model and the history disagree")
     # One input changed answers as before, to the digit, through the same code.
     one = whatif.reading(m, "y", ["x"], plan, plan, plan + 1.0, starts)
     for key in ("sign", "basis", "explains"):
@@ -235,4 +241,3 @@ def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up(
     for c in ("x", "z"):
         alone = whatif.reading(m, "y", c, plan, plan, plan + 1.0, starts)
         assert np.isclose(alone["parts"][0]["history_shift"], next(part["history_shift"] for part in both["parts"] if part["input"] == c))
-

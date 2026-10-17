@@ -128,8 +128,7 @@ def started(**fields: Any) -> None:
 def cycle(jobs: int, reads: int, cells: int, callers: int, kind: str, seconds: float, waiting_cells: int) -> None:
     log.info(
         "cycle",
-        extra={"jobs": jobs, "reads": reads, "cells": cells, "callers": callers, "kind": kind,
-               "seconds": round(seconds, 4), "waiting_cells": waiting_cells},
+        extra={"jobs": jobs, "reads": reads, "cells": cells, "callers": callers, "kind": kind, "seconds": round(seconds, 4), "waiting_cells": waiting_cells},
     )
     _add("cycles", 1, kind=kind)
     _add("reads", reads, kind=kind)

@@ -4,7 +4,6 @@ shape, the specification's fields, errors in place, refusals."""
 import asyncio
 import io
 import json
-import os
 import threading
 import time
 
@@ -164,7 +163,10 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     assert values[1] == pytest.approx(25.5) and values[2] - values[1] < high - median
     # A total's answer declares the dependence it rests on and where it comes from.
     # What the answer rests on: the coverage table's basis first, then the total's band width, each naming its grain.
-    assert got["answer"]["assumptions"] == [coverage.basis("month"), {"field": "totals", "grain": "month", "dependence": forecast.DEPENDENCE["month"], "basis": forecast.dependence("month")["basis"]}]
+    assert got["answer"]["assumptions"] == [
+        coverage.basis("month"),
+        {"field": "totals", "grain": "month", "dependence": forecast.DEPENDENCE["month"], "basis": forecast.dependence("month")["basis"]},
+    ]
     assert weekly["answer"]["assumptions"][1]["dependence"] == forecast.DEPENDENCE["week"] and weekly["answer"]["assumptions"][1]["basis"].startswith("fitted")
     assert weekly["answer"]["assumptions"][0] == coverage.basis("week") and "held-out" in coverage.basis("week")["basis"]
     # Days and quarters have a value of their own, measured on held-out data, there being no other daily or
@@ -222,9 +224,17 @@ def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(clien
     r = client.arrow("/forecast", SPEC | {"targets": ["sales", "orders"]}, table)
     assert r.status_code == 200, r.text
     back = pa.ipc.open_stream(r.content).read_all()
-    assert pa.types.is_timestamp(back.schema.field("origin").type) and back.num_rows == 36  # three columns answered, each 3 steps by 3 levels and the total of 3
-    assert json.loads(back.schema.metadata[b"answer"])["errors"] == [{"member": "b", "origin": "2024-08-01T00:00:00", "column": "orders", "error": "2 known values of column 1 of the history: a forecast needs 6"}]
-    assert wire.clean({"a": datetime.date(2024, 8, 1), "b": np.datetime64("2024-08"), "c": [datetime.datetime(2024, 8, 1, 12, 30)]}) == {"a": "2024-08-01", "b": "2024-08", "c": ["2024-08-01T12:30:00"]}
+    assert (
+        pa.types.is_timestamp(back.schema.field("origin").type) and back.num_rows == 36
+    )  # three columns answered, each 3 steps by 3 levels and the total of 3
+    assert json.loads(back.schema.metadata[b"answer"])["errors"] == [
+        {"member": "b", "origin": "2024-08-01T00:00:00", "column": "orders", "error": "2 known values of column 1 of the history: a forecast needs 6"}
+    ]
+    assert wire.clean({"a": datetime.date(2024, 8, 1), "b": np.datetime64("2024-08"), "c": [datetime.datetime(2024, 8, 1, 12, 30)]}) == {
+        "a": "2024-08-01",
+        "b": "2024-08",
+        "c": ["2024-08-01T12:30:00"],
+    }
 
 
 def test_the_arrow_encoding_answers_the_same_as_json(client):
@@ -233,7 +243,13 @@ def test_the_arrow_encoding_answers_the_same_as_json(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith(wire.ARROW), r.text
     back = pa.ipc.open_stream(r.content).read_all()
     answer = json.loads(back.schema.metadata[b"answer"])
-    assert answer == {"service": "glossthesi", "version": "dev", "errors": [], "coverage": coverage.held("month", 3, [3], SPEC["levels"]), "assumptions": [coverage.basis("month"), forecast.dependence("month")]}
+    assert answer == {
+        "service": "glossthesi",
+        "version": "dev",
+        "errors": [],
+        "coverage": coverage.held("month", 3, [3], SPEC["levels"]),
+        "assumptions": [coverage.basis("month"), forecast.dependence("month")],
+    }
     assert back.schema.field("origin").type == pa.int64() and back.schema.field("period").type == pa.int64()
     listed = {name: back.column(name).to_pylist() for name in back.column_names}
     as_json = client.send("/forecast", SPEC, table).json()
@@ -260,7 +276,9 @@ def test_several_targets_are_answered_per_column_and_a_short_one_fails_alone(cli
     assert [row["value"] for row in _rows(got, member="a", column="orders", span=3)][1] == pytest.approx(10.5)
     assert [row["value"] for row in _rows(got, member="b", column="sales", span=None)] == pytest.approx([8.1, 8.5, 8.9] * 3)
     assert _rows(got, member="b", column="orders") == []
-    assert got["answer"]["errors"] == [{"member": "b", "origin": 8, "column": "orders", "error": "2 known values of column 1 of the history: a forecast needs 6"}]
+    assert got["answer"]["errors"] == [
+        {"member": "b", "origin": 8, "column": "orders", "error": "2 known values of column 1 of the history: a forecast needs 6"}
+    ]
     assert kernels.get().chronos.groups == [(2, forecast.GROUP, True)]  # both members have two columns: one group
     # No column with enough history fails the member.
     r = client.send("/forecast", spec | {"horizon": 2, "totals": []}, _table(a={"sales": [None] * 8, "orders": [None] * 8}))
@@ -342,7 +360,11 @@ def test_a_member_that_cannot_be_forecast_fails_alone(client):
     table["promotion"] += [1, 1]
     r = client.send("/forecast", spec, table)
     got = r.json()
-    assert r.status_code == 200 and {e["member"] for e in got["answer"]["errors"]} == {"bad", "a"} and all("a value under zero" in e["error"] for e in got["answer"]["errors"])
+    assert (
+        r.status_code == 200
+        and {e["member"] for e in got["answer"]["errors"]} == {"bad", "a"}
+        and all("a value under zero" in e["error"] for e in got["answer"]["errors"])
+    )
     assert [row["value"] for row in _rows(got, member="c")] == [9.5, 9.5]
 
 
@@ -364,7 +386,9 @@ def test_the_walk_forecasts_the_last_periods_from_the_history_before_them_and_re
     # Origins named: the same, from the periods asked; one that is no period is an error.
     r = client.send("/forecast", spec | {"origins": [8, 11, 99]}, _table(a=LONG))
     got = r.json()
-    assert [row["origin"] for row in _rows(got)[::3]] == [8, 11] and got["answer"]["errors"] == [{"member": "a", "origin": 99, "error": "no actual period of that name"}]
+    assert [row["origin"] for row in _rows(got)[::3]] == [8, 11] and got["answer"]["errors"] == [
+        {"member": "a", "origin": 99, "error": "no actual period of that name"}
+    ]
     # Too short a history for the walk asked: what can be walked is, and the answer says what could not.
     r = client.send("/forecast", spec | {"origins": 6}, _table(a=[1, 2, 3, 4, 5, 6, 7]))
     got = r.json()
@@ -395,17 +419,24 @@ def test_forecast_refusals(client):
     # The model's own grid runs from 0.01 to 0.99: a level at its edge is answered, one outside is refused rather than clamped.
     assert client.send("/forecast", SPEC | {"levels": [0.01, 0.5, 0.99]}, base).status_code == 200
     for table, word in (
-        ({"period": PERIODS[:8], "y": HISTORY}, "`member`"), ({"member": ["a"] * 8, "y": HISTORY}, "`period`"),
+        ({"period": PERIODS[:8], "y": HISTORY}, "`member`"),
+        ({"member": ["a"] * 8, "y": HISTORY}, "`period`"),
         ({"member": ["a"] * 8, "period": [1, 1, 2, 3, 4, 5, 6, 7], "y": HISTORY}, "two rows of period 1"),
         ({"member": ["a"] * 8, "period": PERIODS[:8], "y": ["x"] * 8}, "holds text"),
         ({"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual"] * 7 + ["done"]}, "status"),
         ({"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual", "plan"] + ["actual"] * 6}, "before its last actual row"),
-        ({"member": ["a"] * 8, "period": [None] + PERIODS[1:8], "y": HISTORY}, "`period` is missing"),
+        ({"member": ["a"] * 8, "period": [None, *PERIODS[1:8]], "y": HISTORY}, "`period` is missing"),
         ({"member": ["a", None] + ["a"] * 6, "period": PERIODS[:8], "y": HISTORY}, "`member` is missing"),
     ):
         r = client.send("/forecast", SPEC, table)
         assert r.status_code == 400 and word in r.json()["error"], (table, r.text)
-    for body, word in (({"spec": SPEC}, "table"), ({"spec": SPEC, "table": {"y": [1, "a"]}}, "mixes"), ({"spec": SPEC, "table": {"y": [1], "member": []}}, "same number"), ({"table": base}, "spec"), ([1], "object")):
+    for body, word in (
+        ({"spec": SPEC}, "table"),
+        ({"spec": SPEC, "table": {"y": [1, "a"]}}, "mixes"),
+        ({"spec": SPEC, "table": {"y": [1], "member": []}}, "same number"),
+        ({"table": base}, "spec"),
+        ([1], "object"),
+    ):
         r = client.post("/forecast", json=body)
         assert r.status_code == 400 and word in r.json()["error"], (body, r.text)
     r = client.post("/forecast", content=b"not json", headers={"content-type": "application/json"})
@@ -424,7 +455,9 @@ def test_misfit_serves_how_far_each_cell_lies_below_its_column(client):
     assert got["a"] == [pytest.approx(0.0), None] and got["b"] == [pytest.approx(-0.6), pytest.approx(0.6)]
     # A row without a share is null, not a number. A frame has no reserved names: a column called `status` is a column of it.
     r = client.send("/misfit", {}, {"status": ["open", "paid", "open"], "a": [1, 3, 5], "b": [2, 4, 6]})
-    assert r.status_code == 200 and r.json()["table"]["score"] == [None, None, None] and kernels.get().table.shape == (3, 3) and kernels.get().categorical == [0]
+    assert (
+        r.status_code == 200 and r.json()["table"]["score"] == [None, None, None] and kernels.get().table.shape == (3, 3) and kernels.get().categorical == [0]
+    )
     for spec, word in (({"cells": "yes"}, "cells"), ({"folds": 0}, "folds"), ({"categorical": ["z"]}, "no column `z`"), ({"categorical": "a"}, "categorical")):
         r = client.send("/misfit", spec, MISFIT)
         assert r.status_code == 400 and word in r.json()["error"], (spec, r.text)
@@ -436,7 +469,9 @@ def test_misfit_takes_categories_as_text_or_by_name(client):
     r = client.send("/misfit", {}, {"k": ["b", "a", ""], "n": [1, None, 3], "f": [True, False, True], "v": [7, 7, 8]})
     assert r.status_code == 200, r.text
     k = kernels.get()
-    assert k.categorical == [0, 2] and np.array_equal(np.isnan(k.table), [[False, False, False, False], [False, True, False, False], [True, False, False, False]])
+    assert k.categorical == [0, 2] and np.array_equal(
+        np.isnan(k.table), [[False, False, False, False], [False, True, False, False], [True, False, False, False]]
+    )
     assert k.table[:, 0].tolist()[:2] == [1.0, 0.0] and k.table[:, 2].tolist() == [1.0, 0.0, 1.0] and k.table[:, 3].tolist() == [7.0, 7.0, 8.0]
     # A numeric column named categorical is coded by its values as text.
     r = client.send("/misfit", {"categorical": ["account"]}, {"account": [4000, 4010], "rate": [1.5, 2.5]})
@@ -565,7 +600,7 @@ def test_the_pit_reads_the_actual_against_the_models_own_grid():
     zeros = np.zeros(len(forecast.GRID))
     assert forecast.pit(zeros, 0.0) == pytest.approx(0.5)
     tied = np.where(np.asarray(forecast.GRID) < 0.3, 0.0, 1.0)
-    assert forecast.pit(tied, 0.0) == pytest.approx(np.mean([l for l in forecast.GRID if l < 0.3]))
+    assert forecast.pit(tied, 0.0) == pytest.approx(np.mean([level for level in forecast.GRID if level < 0.3]))
     assert np.isnan(forecast.pit(grid, float("nan"))) and np.isnan(forecast.pit(grid, None))
 
 
@@ -588,7 +623,11 @@ def _scenario(seed=0, ahead=4, **members):
         x = (rng.uniform(size=60) < 0.5).astype(float)
         y = level + effect * x + rng.normal(0, 0.3, 60)
         z, later = rng.uniform(size=60), rng.uniform(size=ahead)
-        for status, periods, xs, ys, zs in (("actual", weeks[:60], x, y, z), ("plan", weeks[60:], np.zeros(ahead), [None] * ahead, later), ("scenario", weeks[60:], np.ones(ahead), [None] * ahead, later)):
+        for status, periods, xs, ys, zs in (
+            ("actual", weeks[:60], x, y, z),
+            ("plan", weeks[60:], np.zeros(ahead), [None] * ahead, later),
+            ("scenario", weeks[60:], np.ones(ahead), [None] * ahead, later),
+        ):
             n = len(periods)
             out["member"] += [name] * n
             out["period"] += periods
@@ -618,13 +657,20 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     assert {row["sign"] for row in scenario} == {"+"} and scenario[0]["confidence"] == "direction" and "the model moves it the same way" in scenario[0]["basis"]
     assert all(abs((s["value"] - p["value"]) - 2.0) < 1e-9 for s, p in zip(scenario, plan))
     # Beside the model's value, the history's own estimate of the scenario with its interval: the plan plus what the history says the change does.
-    assert all(abs(s["history_value"] - p["value"] - 2.0) < 0.3 and s["history_low"] < s["history_value"] < s["history_high"] and p["history_value"] is None for s, p in zip(scenario, plan))
+    assert all(
+        abs(s["history_value"] - p["value"] - 2.0) < 0.3 and s["history_low"] < s["history_value"] < s["history_high"] and p["history_value"] is None
+        for s, p in zip(scenario, plan)
+    )
     assert scenario[0]["explains"] > 0.8 and 0 < scenario[0]["error"] < 1.5 and [row["period"] for row in scenario] == _weeks(64)[-4:]
     # What the history leaves of y, the error its estimate is read against: the noise of 0.3 the series was made with.
     assert 0.2 < scenario[0]["history_error"] < 0.45 and held[0]["history_error"] == scenario[0]["history_error"]
     # A member whose history shows nothing, and the model moves nothing: no effect visible, which is not "no effect".
     still = _rows(answer, member="b", status="scenario", level=0.5)
-    assert {row["sign"] for row in still} == {"0"} and still[0]["confidence"] == "no effect visible" and still[0]["history_low"] < still[0]["value"] < still[0]["history_high"]
+    assert (
+        {row["sign"] for row in still} == {"0"}
+        and still[0]["confidence"] == "no effect visible"
+        and still[0]["history_low"] < still[0]["value"] < still[0]["history_high"]
+    )
 
 
 def test_a_whatif_says_what_it_cannot_answer_and_why(client, monkeypatch):
@@ -640,7 +686,9 @@ def test_a_whatif_says_what_it_cannot_answer_and_why(client, monkeypatch):
     assert beyond[0]["sign"] == "?" and beyond[0]["basis"].startswith("the change goes beyond what the history holds") and beyond[0]["history_value"] is None
     # The input as planned already lies beyond it: said as that, not as the change.
     table["x"] = [{"plan": 2.0, "scenario": 3.0}.get(status, x) for status, x in zip(table["status"], table["x"])]
-    assert _rows(client.send("/whatif", WHATIF, table).json(), status="scenario", level=0.5)[0]["basis"].startswith("the input as planned goes beyond what the history holds")
+    assert _rows(client.send("/whatif", WHATIF, table).json(), status="scenario", level=0.5)[0]["basis"].startswith(
+        "the input as planned goes beyond what the history holds"
+    )
     # An input that never varied in the history, and one that only repeats another.
     table = _scenario(a=(50.0, 2.0))
     table["x"] = [x if status != "actual" else 0.0 for status, x in zip(table["status"], table["x"])]
@@ -704,7 +752,7 @@ def test_whatif_refusals(client):
     assert refused(period=list(range(len(table["period"])))).status_code == 400
     # The periods ahead come twice, the same periods in both.
     lost = [s if i != len(table["status"]) - 1 else "plan" for i, s in enumerate(table["status"])]
-    assert "the same periods in both" in refused(status=lost, period=table["period"][:-1] + ["2030-01-07"]).json()["error"]
+    assert "the same periods in both" in refused(status=lost, period=[*table["period"][:-1], "2030-01-07"]).json()["error"]
     assert "takes `actual` rows" in refused(status=["forecast" if s == "plan" else s for s in table["status"]]).json()["error"]
     assert "needs an input" in client.send("/whatif", WHATIF, {k: v for k, v in table.items() if k not in ("x", "z")}).json()["error"]
     assert "`targets`" in refused(spec={"targets": ["nope"], "levels": [0.5]}).json()["error"]

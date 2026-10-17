@@ -20,7 +20,8 @@ import numpy as np
 import torch
 
 from .forecast import Series
-from .kernels import Kernels, misfit_workers as default_misfit_workers
+from .kernels import Kernels
+from .kernels import misfit_workers as default_misfit_workers
 
 LEVELS = [0.05, 0.10, 0.50, 0.90, 0.95]
 
