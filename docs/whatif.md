@@ -256,10 +256,17 @@ the check, so the reach is a quantile now and the share of periods
 is what fires it; both are declared on every answer. On the three
 tables the check as first built fired on 5 of 80 series and columns:
 the German market's two forecasts as planned on 4, a change on the
-hourly load on 1, none on Rossmann, where promotion and holiday have
-fallen together; the parts equal the single-lever readings to the
-digit, and the direction holds on all 64 where the history shows the
-joint effect.
+hourly load on 1, none on Rossmann; the parts equal the single-lever
+readings to the digit, and the direction held on all 64 where the
+history showed the joint effect. With the quantile reach (GK-56 in
+the evaluation's findings) it fires on 22: the German market's 4 as
+before, and 18 of Rossmann's 60 series, the stores where a promotion
+and a school holiday never fell together, which the loneliest-row
+reach had let pass. Where the history shows the joint effect the
+model agrees on 46 of 47, the size 1.06 of the history's; 15 of
+Rossmann's signs say that the history's estimate points both ways
+over the periods ahead, since a store's weeks differ in which lever
+moves, and 3 series whose change nets to nothing answer `?`.
 
 Tested the same day on the three development tables with two inputs
 named (80 series and columns; GK-50 in the evaluation's findings):
