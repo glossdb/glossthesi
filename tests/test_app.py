@@ -188,12 +188,13 @@ def test_the_answer_says_how_often_its_bands_held(client, monkeypatch):
     steps, spans = [e for e in got if e["span"] is None], [e for e in got if e["span"] is not None]
     assert [e["step"] for e in steps] == [1, 2, 3] and [(e["step"], e["span"]) for e in spans] == [(3, 3)]
     assert all(e["low"] == 0.1 and e["high"] == 0.9 for e in got)
-    assert [(e["share"], e["points"]) for e in steps] == [(row[0], row[2]) for row in coverage.HELD["month"]["steps"][:3]]
-    assert (spans[0]["share"], spans[0]["points"]) == (coverage.HELD["month"]["spans"][2][0], coverage.HELD["month"]["spans"][2][2])
+    assert [(e["share"], e["se"], e["points"]) for e in steps] == [(row[0], row[1], row[4]) for row in coverage.HELD["month"]["steps"][:3]]
+    assert (spans[0]["share"], spans[0]["se"], spans[0]["points"]) == tuple(coverage.HELD["month"]["spans"][2][i] for i in (0, 1, 4))
+    assert all(e["datasets"] == coverage.DATASETS["month"] == 4 and 0 < e["se"] < 0.1 for e in got)  # the error and the datasets pooled ride with every share
     # Both bands where both pairs of levels are asked, the 90% one from the second share.
     both = client.send("/forecast", SPEC | {"levels": [0.05, 0.1, 0.5, 0.9, 0.95], "totals": []}, _table(a=HISTORY)).json()["answer"]["coverage"]
     assert [(e["step"], e["low"], e["high"]) for e in both] == [(s, lo, hi) for s in (1, 2, 3) for lo, hi in ((0.1, 0.9), (0.05, 0.95))]
-    assert both[1]["share"] == coverage.HELD["month"]["steps"][0][1]
+    assert (both[1]["share"], both[1]["se"]) == coverage.HELD["month"]["steps"][0][2:4]
     # A band the levels do not form has no entry; a step past the table has none; another grain reads its own rows.
     assert client.send("/forecast", SPEC | {"levels": [0.2, 0.8]}, _table(a=HISTORY)).json()["answer"]["coverage"] == []
     far = client.send("/forecast", SPEC | {"horizon": 24, "totals": []}, _table(a=LONG)).json()["answer"]["coverage"]

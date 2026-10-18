@@ -107,8 +107,11 @@ it and no others.
 held-out data, at this grain (`docs/forecast.md`, GK-46). One entry
 per step of the horizon and per span asked, per band: `step`, `span`
 (null for a period), `low` and `high` (the levels that bound the
-band), `share` (the actual values inside it) and `points` (how many
-the share counts). The bands measured are 0.10 to 0.90 and 0.05 to
+band), `share` (the actual values inside it), `se` (its standard
+error, clustered by series and by origin), `points` (how many the
+share counts) and `datasets` (how many held-out datasets it pools). A
+share with an error of 0.05 and one with 0.01 are not the same
+knowledge, and a caller's rule reads both numbers. The bands measured are 0.10 to 0.90 and 0.05 to
 0.95; a band the levels do not form, a step past the table (12
 months, 13 weeks, 31 days, 4 quarters) and a span at a dependence
 other than the one it was measured at have no entry. The spans of

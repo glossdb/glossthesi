@@ -60,7 +60,8 @@ finding.
 6. **How often the bands held** (GK-46): every answer carries, per
    step and span and per band the request's levels form, the share of
    actual values that landed inside such a band on held-out data at
-   that grain, with the points behind it (`coverage.py`). A span's
+   that grain, with its standard error, the points behind it and the
+   datasets pooled (`coverage.py`; the error since 2026-10-18). A span's
    share was measured at the dependence of its grain, so a grain whose
    dependence moves serves its steps and no spans until the table is
    measured again.
