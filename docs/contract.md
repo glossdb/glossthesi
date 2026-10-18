@@ -71,7 +71,7 @@ answer's `period` is null there.
 
 | Field | Meaning | Absent |
 |---|---|---|
-| `targets` | The columns to forecast. Every other value column is a covariate: its past values ride with the history, and it is known ahead where the member's rows past the last actual hold it for the whole horizon. | required |
+| `targets` | The columns to forecast. Every other value column is a covariate: its past values ride with the history, and it is known ahead where the member's rows past the last actual hold it for the whole horizon. Where a member has rows ahead that do not (a missing value, fewer rows than the horizon), the covariate informs the forecast over the history only, and `assumptions` says so for that member and column (`field` `covariates`). | required |
 | `horizon` | Periods ahead, 1 to 1024. | required, except with `origins`, where it is 1 |
 | `levels` | The quantile levels asked for, each between 0.01 and 0.99, the model's own grid; a level outside it is refused, not answered with the grid's edge under its name. | required |
 | `totals` | Spans in periods: for each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain; the answer's `assumptions` names the value and on what data it was measured (`docs/forecast.md`, GK-45, GK-48). | none |

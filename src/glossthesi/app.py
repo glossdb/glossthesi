@@ -281,6 +281,7 @@ class _ForecastPlan:
     values: dict[str, np.ndarray]
     status: np.ndarray
     errors: list[dict] = field(default_factory=list)
+    demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, said in `assumptions`
 
 
 class Forecast:
@@ -339,6 +340,7 @@ class Forecast:
         covariates = [c for c in numbers + texts if c not in targets]
         errors: list[dict] = []
         walks: list[list[_Input]] = []  # per member, its inputs oldest origin first
+        demoted: dict[tuple[str, str], dict] = {}
         for member, s, e in members:
             actual = status[s:e] == "actual"
             n = int(actual.sum())
@@ -375,11 +377,22 @@ class Forecast:
                     known = (~np.isnan(ahead)).all() if c in values else (ahead != "").all()
                     if ahead.shape[0] == horizon and known:
                         future[c] = ahead
+                    elif ahead.shape[0] and (member, c) not in demoted and ((~np.isnan(past[c])).any() if c in values else (past[c] != "").any()):
+                        # The member has rows ahead that do not hold this covariate for the whole horizon, and its history does
+                        # hold it: it informs the forecast over the history only, and the answer says so rather than leaving the
+                        # caller to guess. A column the member never had is no covariate of its own and gets no note.
+                        why = "a missing value" if ahead.shape[0] == horizon else f"{ahead.shape[0]} rows ahead for a horizon of {horizon}"
+                        demoted[member, c] = {
+                            "field": "covariates",
+                            "member": member,
+                            "column": c,
+                            "basis": f"assumed: `{c}` is known over the history only — the rows ahead do not hold it for the whole horizon ({why}), so it informed the forecast as a past covariate, not as a known future",
+                        }
                 inputs.append(_Input(member, s, e, s + o, forecast.Series(history, past, future, width)))
             walks.append(inputs)
         # Origin-major, so that the series forecast together are those of one origin, as a request per origin would send them.
         ordered = [walk[j] for j in range(max((len(w) for w in walks), default=0)) for walk in walks if j < len(walk)]
-        return _ForecastPlan(table, targets, horizon, levels, spans, grain, ordered, values, status, errors)
+        return _ForecastPlan(table, targets, horizon, levels, spans, grain, ordered, values, status, errors, list(demoted.values()))
 
     @staticmethod
     async def serve(own: Owner, caller: str, plan: _ForecastPlan) -> tuple[pa.Table, dict]:
@@ -453,6 +466,7 @@ class Forecast:
         assumptions = [coverage.basis(plan.grain)] if answer["coverage"] else []
         if plan.spans:
             assumptions.append(forecast.dependence(plan.grain))
+        assumptions += plan.demoted
         if assumptions:
             answer["assumptions"] = assumptions
         return table, answer

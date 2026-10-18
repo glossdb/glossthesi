@@ -339,10 +339,22 @@ def test_covariates_reach_the_model_and_members_with_the_same_ones_go_together(c
     mixed = _table(a={"y": HISTORY, "season": ["low"] * 7 + [None], "price": [1, None, 3, 4, 5, 6, 7, 8]})
     r = client.send("/forecast", spec, mixed)
     assert r.status_code == 200 and kernels.get().chronos.kinds == [{"season": "O", "price": "f"}]
-    # A covariate with a value missing in the periods ahead is not known ahead.
+    # A covariate with a value missing in the periods ahead is not known ahead, and the answer says so for that member;
+    # a member whose rows ahead hold it, or that has no rows ahead, gets no such note.
     table["promotion"][-1] = None
     r = client.send("/forecast", spec, table)
     assert [row["value"] for row in _rows(r.json(), member="c")] == [8.5, 8.5]
+    notes = [a for a in r.json()["answer"]["assumptions"] if a["field"] == "covariates"]
+    assert [(a["member"], a["column"]) for a in notes] == [("c", "promotion")] and "a missing value" in notes[0]["basis"]
+    # Fewer rows ahead than the horizon is the other way a covariate stays past-only.
+    fewer = _table(a={"y": HISTORY, "promotion": [0] * 8})
+    fewer["member"] += ["a"]
+    fewer["period"] += [9]
+    fewer["status"] = ["actual"] * 8 + ["forecast"]
+    fewer["y"] += [None]
+    fewer["promotion"] += [10]
+    notes = [a for a in client.send("/forecast", spec, fewer).json()["answer"]["assumptions"] if a["field"] == "covariates"]
+    assert len(notes) == 1 and "1 rows ahead for a horizon of 2" in notes[0]["basis"]
 
 
 def test_a_member_that_cannot_be_forecast_fails_alone(client):
