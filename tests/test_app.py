@@ -357,6 +357,24 @@ def test_covariates_reach_the_model_and_members_with_the_same_ones_go_together(c
     assert len(notes) == 1 and "1 rows ahead for a horizon of 2" in notes[0]["basis"]
 
 
+def test_a_series_mostly_made_of_zeros_is_forecast_by_itself(client):
+    spec = {"targets": ["y"], "horizon": 2, "levels": [0.5]}
+    spare = [0, 0, 3, 0, 0, 0, 2, 0]  # six of eight known values are zero
+    busy = [0, 1, 0, 2, 3, 4, 5, 6]  # three of eight
+    r = client.send("/forecast", spec, _table(a=HISTORY, b=HISTORY, spare=spare, busy=busy))
+    assert r.status_code == 200, r.text
+    # One group of three (a, b, busy) and one of one: the spare part went alone, and the answer says so once.
+    assert sorted(size for size, _, _ in kernels.get().chronos.groups) == [1, 3]
+    notes = [x for x in r.json()["answer"]["assumptions"] if x["field"] == "members"]
+    assert len(notes) == 1 and notes[0]["value"] == forecast.MOSTLY_ZERO == 0.5 and notes[0]["count"] == 1 and "by itself" in notes[0]["basis"]
+    # Missing values do not count as zeros; a column of a multi-column member counts for the member.
+    sparse = _table(a=HISTORY, spare={"y": [None, None, 0, 0, 1, 2, 3, 4], "z": [0, 0, 0, 0, 1, 0, 0, 1]})
+    kernels.get().chronos.groups.clear()
+    r = client.send("/forecast", spec | {"targets": ["y", "z"]}, sparse)
+    assert r.status_code == 200 and sorted(size for size, _, _ in kernels.get().chronos.groups) == [1, 1]
+    assert not any(x["field"] == "members" for x in client.send("/forecast", spec, _table(a=HISTORY, b=busy)).json()["answer"].get("assumptions", []))
+
+
 def test_a_member_that_cannot_be_forecast_fails_alone(client):
     spec = {"targets": ["y"], "horizon": 2, "levels": [0.5]}
     r = client.send("/forecast", spec, _table(short=[1, None, 3], a=HISTORY))

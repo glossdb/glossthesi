@@ -58,7 +58,10 @@ A route may add fields of its own; they are listed below.
 ## `/forecast`: the periods ahead, or the walk
 
 Chronos-2, as its package ships it, the series of a request forecast
-together in groups of one shape (`docs/forecast.md`, GK-26).
+together in groups of one shape (`docs/forecast.md`, GK-26), except a
+series at least half of whose known values are zero, which is
+forecast by itself (GK-66; `assumptions` says so, `field` `members`,
+with how many such series the request held).
 
 **The table.** Rows with status `actual` are the history. Rows of
 any other status after a member's last actual row are the periods

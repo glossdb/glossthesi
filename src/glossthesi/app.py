@@ -466,6 +466,9 @@ class Forecast:
         assumptions = [coverage.basis(plan.grain)] if answer["coverage"] else []
         if plan.spans:
             assumptions.append(forecast.dependence(plan.grain))
+        alone = len({one.member for one in plan.inputs if one.series.mostly_zero})
+        if alone:
+            assumptions.append(forecast.alone(alone))
         assumptions += plan.demoted
         if assumptions:
             answer["assumptions"] = assumptions

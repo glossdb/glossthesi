@@ -34,9 +34,13 @@ finding.
 ## How it works
 
 1. **The series of a request are forecast together** (GK-26), in
-   groups of at most 100, so that they inform each other. Columns
-   that are not targets are covariates, known ahead where the rows
-   ahead carry them. Nothing is recalibrated.
+   groups of at most 100, so that they inform each other, except a
+   series at least half of whose known values are zero, which goes by
+   itself (GK-66, since 2026-10-19): together, such series lose their
+   band, and every answer that held one says so. Columns that are not
+   targets are covariates, known ahead where the rows ahead carry
+   them; one the rows ahead do not hold for the whole horizon is named
+   in the answer. Nothing is recalibrated.
 2. **Several target columns of one member** are one multivariate
    series (GK-36).
 3. **A total** (GK-27, GK-34, GK-45, GK-48). Its median is the sum of
@@ -109,9 +113,10 @@ better than the baseline.
 
 ## Where it is weak
 
-- **Series that are mostly zero** (spare parts): the 80% interval
-  covers 0.57 to 0.71, and forecasting the series together makes it
-  worse there (GK-29).
+- **Series that are mostly zero** (spare parts): forecast together
+  with the others the 80% interval covered 0.57 to 0.71 (GK-29); by
+  themselves, which they are since 2026-10-19, 0.83 and 0.85 (GK-66),
+  at a loss still 0.5 to 0.7 of the naive baseline's.
 - **Macroeconomic indicators:** worse than the naive baseline for the
   next month and the quarter (loss 1.24 and 1.12).
 - **Short history:** 36 months give one origin; coverage 0.54 to
