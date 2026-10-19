@@ -48,8 +48,7 @@ MODEL = "amazon/chronos-2"
 REVISION = "29ec3766d36d6f73f0696f85560a422f50e8498c"
 GROUP = 100  # series forecast together, at most: the size the model's published results were made with
 # A series at least this share of whose known values are zero is forecast by itself, not with the others of its request:
-# forecast together, such series lose the band (the spare parts' 80% interval covered 0.57 against 0.83 alone, GK-66), and
-# the gain starts at this share, not below it. Every other series gains from the others (GK-26).
+# forecast together, such series lose their band, and the gain of going alone starts at this share (GK-66).
 MOSTLY_ZERO = 0.5
 MIN_HISTORY = 6  # known values a series needs
 MAX_HORIZON = 1024
@@ -163,7 +162,7 @@ def alone(count: int) -> dict:
         "field": "members",
         "value": MOSTLY_ZERO,
         "count": count,
-        "basis": f"measured: a series at least this share of whose known values are zero is forecast by itself, not together with the others of the request, because together such series lose their band (the spare parts' 80% interval covered 0.57 of the next month together and 0.83 alone, 0.71 and 0.85 over the year; series under half zeros gain nothing from going alone, and every other series loses a little, GK-66); {count} such series in this request",
+        "basis": f"measured: a series at least this share of whose known values are zero is forecast by itself, not together with the others of the request, because together such series lose their band and the others gain from being together (GK-66); {count} such series in this request",
     }
 
 

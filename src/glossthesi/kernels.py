@@ -254,27 +254,14 @@ class Kernels:
         The orderings default to the port's protocol: identity and
         reverse, so every column conditions both early and late and the
         read costs two conditionals per column. What a column is read
-        against depends on its place among the columns, so the order the
-        caller sends them in is part of the read: the rows' scores
-        correlate 0.53 to 0.90 between column orders and the cell named
-        changes on a quarter of the planted rows (GK-67). Read in the
-        order of their names instead, the tables lose (a swapped amount
-        0.99 to 0.97, the SAP order items 0.98 to 0.94): the order a
-        caller writes a table in, the columns a value is computed from
-        before it, is what the chain rule reads, and the contract says
-        so. Three order-free reads were judged against this one and none
-        won across the frames (GK-68): each column against all the others
-        only (better on categories and the bank's transactions, worse on
-        a row far out but consistent with itself, on a wrong unit and on
-        the company's payments), that read and the column alone
-        averaged, and the lower of the two. A category the context never
-        held gets the package's floor of `UNSEEN`, lifted to one in n + 1
-        of the conditional's training rows: with `folds`, a category that
-        appears in the scored fold only is unseen by the classifier that
-        scores it, and at 1e-10 (minus 23 nats) it named the row's
-        strangest cell whether or not the row was wrong (43 of the 100
-        strangest SAP order items clean rows so named; 24 with the lift,
-        GK-69). Not the package's own
+        against depends on its place among the columns, so the caller's
+        column order is part of the read and the contract says so
+        (GK-67); order-free reads were judged and not taken (GK-68). A
+        category the context never held gets the package's floor of
+        `UNSEEN`, lifted to one in n + 1 of the conditional's training
+        rows, the rule of succession: with `folds`, a category seen in
+        the scored fold only is strange, not minus 23 nats strange
+        (GK-69). Not the package's own
         `score_samples`, whose latin shuffler ignores the count it is
         asked for and returns one ordering per column — sixteen on a
         sixteen-column frame, eight times the work.

@@ -29,21 +29,13 @@ finding.
 1. **Each cell is read against the columns before it, twice.** TabICL
    gives the density of a number, or the probability of a category,
    given the columns before it in the order sent, and again in that
-   order reversed, so every column is read early and late and the
-   first and the last column alone; the two log densities are
-   averaged. What a column is read against thus depends on its place:
-   between column orders the rows' scores correlate 0.53 to 0.90 and
-   the cell named changes on a quarter of the planted rows (GK-67).
-   The order a caller writes a table in, the columns a value is
-   computed from before it, is the order that reads best: by name
-   instead, a swapped amount falls from 0.99 to 0.97 and the SAP order
-   items from 0.98 to 0.94, and three order-free reads lose on other
-   tables what they gain on some (GK-68; one of them, each cell
-   against all the others, is better on categories and the bank's
-   transactions and worse on a row far out but consistent with itself,
-   a wrong unit and the company's payments). So the order is the
-   caller's, and declared. A column of text, of true and false, or one
-   named in `categorical` is a category (GK-37).
+   order reversed; the two log densities are averaged. The order is
+   thus part of the read, and it is the caller's: the order a table is
+   naturally written in, the columns a value is computed from before
+   it, reads best (GK-67; order-free reads were judged and lose on
+   some tables what they gain on others, GK-68). A column of text, of
+   true and false, or one named in `categorical` is a category
+   (GK-37).
 2. **Against its own column** (GK-21). A cell's score is its log
    density minus the median of its column, in units of the column's
    spread, or in nats where the spread is under one nat. A density's
@@ -52,13 +44,10 @@ finding.
 3. **The row's score is its strangest cell** (GK-38), not the sum
    over its cells. Lower is stranger.
 4. **With `folds`,** every row is scored by a model that has not
-   seen it (GK-11). A category that appears in the scored fold only is
-   one that model never saw; the package gives it a probability of
-   1e-10, which named the row's strangest cell whether or not the row
-   was wrong (43 of the 100 strangest SAP order items were clean rows
-   so named), so it is lifted to one in n + 1 of the rows the
-   conditional was fit on (since 2026-10-19, GK-69): 24 of 100, and
-   the average precision 0.44 to 0.67.
+   seen it (GK-11). A category seen in the scored fold only is unseen
+   by that model; its probability is lifted from the package's 1e-10
+   to one in n + 1 of the rows the conditional was fit on (since
+   2026-10-19, GK-69).
 
 ## What was tested
 
@@ -124,10 +113,8 @@ to 1.00 against Isolation Forest's 0.54 to 1.00.
 - **Name codes as categories:** account numbers, tax codes.
 - **Send the columns in the order a value is computed:** quantity and
   price before the amount, the plant before its shipping point. Each
-  column is read against the ones before it (and, reversed, the ones
-  after), so the order is part of the read (GK-67); the order a table
-  is naturally written in reads best, and a reordering changes the
-  rows shown first.
+  column is read against the ones before it, so the order is part of
+  the read (GK-67).
 - **A frame needs two rows and two columns.**
 - **Read the column named as "look here",** not as "this cell is
   wrong": where an error breaks a relation between two columns,
@@ -148,14 +135,10 @@ to 1.00 against Isolation Forest's 0.54 to 1.00.
   a caller should send. glossql's limit of 2,000 rows and 16 columns
   rests on an older timing (GK-12).
 - **Real tables with real, labelled errors.** Every error tested was
-  injected. Raha's Hospital, 1,000 rows with 509 typos its authors
-  planted in text fields, was read (GK-70): the route finds them no
-  better than chance (AUROC 0.51 to 0.55), as a typo is a category
-  seen once, which the self-fit explains by itself and which `folds`
-  cannot tell from a legitimate rare value; a typo is not a relation
-  broken between columns, and a string check is the tool for it.
-  Raha's Flights and Beers hold wrong or oddly written values in 80%
-  and 100% of their rows and were not run.
+  injected. Raha's Hospital, a real table with typos planted in text
+  fields, was read (GK-70): the route finds them no better than
+  chance. A typo is a category seen once, not a relation broken
+  between columns; a string check is the tool for it.
 
 ## What was read
 
