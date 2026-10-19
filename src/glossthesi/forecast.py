@@ -5,7 +5,9 @@ One set-up, chosen on forecasts a quarter and a year ahead
 
 - The series of a request are forecast together, in groups of at most
   100, so that they inform each other. That is how the published
-  results of Chronos-2 are made.
+  results of Chronos-2 are made. A series mostly made of zeros
+  (`MOSTLY_ZERO`, spare parts) is forecast by itself: together with
+  the others it loses its band, alone it holds it (GK-66).
 - Covariates are passed where the request has them: their values over
   the history, and over the periods ahead where they are known.
 - The quantiles are the model's own. Nothing is recalibrated. A
@@ -45,6 +47,10 @@ MODEL = "amazon/chronos-2"
 # change of model and runs the evaluation again; the build bakes this revision and /healthz names it.
 REVISION = "29ec3766d36d6f73f0696f85560a422f50e8498c"
 GROUP = 100  # series forecast together, at most: the size the model's published results were made with
+# A series at least this share of whose known values are zero is forecast by itself, not with the others of its request:
+# forecast together, such series lose the band (the spare parts' 80% interval covered 0.57 against 0.83 alone, GK-66), and
+# the gain starts at this share, not below it. Every other series gains from the others (GK-26).
+MOSTLY_ZERO = 0.5
 MIN_HISTORY = 6  # known values a series needs
 MAX_HORIZON = 1024
 # Between the periods of a span, per grain: the value at which the total's 80% interval covers 0.80 of
@@ -96,6 +102,15 @@ class Series:
     def length(self) -> int:
         return self.history.shape[-1]
 
+    @property
+    def mostly_zero(self) -> bool:
+        """Whether a column's known values are zero at `MOSTLY_ZERO` or more: such a series is forecast by itself."""
+        for values in np.atleast_2d(self.history):
+            known = values[~np.isnan(values)]
+            if known.size and float((known == 0).mean()) >= MOSTLY_ZERO:
+                return True
+        return False
+
     def check(self, horizon: int) -> dict[int, ForecastError]:
         """Raises where the series cannot be forecast. Comes back with
         the columns that cannot be, by index: the series is forecast
@@ -140,6 +155,16 @@ def totals(path: np.ndarray, median: np.ndarray, spans: list[int], grain: str = 
         added = spread.sum(axis=0)
         out[span] = median[:span].sum() + np.sign(added) * np.sqrt(c * added**2 + (1.0 - c) * (spread**2).sum(axis=0))
     return out
+
+
+def alone(count: int) -> dict:
+    """The `assumptions` entry of an answer in which `count` series were forecast by themselves."""
+    return {
+        "field": "members",
+        "value": MOSTLY_ZERO,
+        "count": count,
+        "basis": f"measured: a series at least this share of whose known values are zero is forecast by itself, not together with the others of the request, because together such series lose their band (the spare parts' 80% interval covered 0.57 of the next month together and 0.83 alone, 0.71 and 0.85 over the year; series under half zeros gain nothing from going alone, and every other series loses a little, GK-66); {count} such series in this request",
+    }
 
 
 def dependence(grain: str) -> dict:
@@ -232,14 +257,14 @@ class Chronos2:
         or why the series cannot be. A series that is unfit fails alone,
         and so does a column. Series with the same columns and
         covariates are forecast together, in the order they were
-        sent."""
+        sent; a series mostly made of zeros goes by itself."""
         out: list[list[dict | ForecastError] | ForecastError] = [ForecastError("not forecast")] * len(series)
         groups: dict[tuple, list[int]] = {}
         short: dict[int, dict[int, ForecastError]] = {}
         for i, one in enumerate(series):
             try:
                 short[i] = one.check(horizon)
-                groups.setdefault(one.schema, []).append(i)
+                groups.setdefault((*one.schema, i) if one.mostly_zero else one.schema, []).append(i)
             except ForecastError as e:
                 out[i] = e
         asked = sorted({*levels, *GRID})

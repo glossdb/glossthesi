@@ -188,12 +188,13 @@ def test_the_answer_says_how_often_its_bands_held(client, monkeypatch):
     steps, spans = [e for e in got if e["span"] is None], [e for e in got if e["span"] is not None]
     assert [e["step"] for e in steps] == [1, 2, 3] and [(e["step"], e["span"]) for e in spans] == [(3, 3)]
     assert all(e["low"] == 0.1 and e["high"] == 0.9 for e in got)
-    assert [(e["share"], e["points"]) for e in steps] == [(row[0], row[2]) for row in coverage.HELD["month"]["steps"][:3]]
-    assert (spans[0]["share"], spans[0]["points"]) == (coverage.HELD["month"]["spans"][2][0], coverage.HELD["month"]["spans"][2][2])
+    assert [(e["share"], e["se"], e["points"]) for e in steps] == [(row[0], row[1], row[4]) for row in coverage.HELD["month"]["steps"][:3]]
+    assert (spans[0]["share"], spans[0]["se"], spans[0]["points"]) == tuple(coverage.HELD["month"]["spans"][2][i] for i in (0, 1, 4))
+    assert all(e["datasets"] == coverage.DATASETS["month"] == 4 and 0 < e["se"] < 0.1 for e in got)  # the error and the datasets pooled ride with every share
     # Both bands where both pairs of levels are asked, the 90% one from the second share.
     both = client.send("/forecast", SPEC | {"levels": [0.05, 0.1, 0.5, 0.9, 0.95], "totals": []}, _table(a=HISTORY)).json()["answer"]["coverage"]
     assert [(e["step"], e["low"], e["high"]) for e in both] == [(s, lo, hi) for s in (1, 2, 3) for lo, hi in ((0.1, 0.9), (0.05, 0.95))]
-    assert both[1]["share"] == coverage.HELD["month"]["steps"][0][1]
+    assert (both[1]["share"], both[1]["se"]) == coverage.HELD["month"]["steps"][0][2:4]
     # A band the levels do not form has no entry; a step past the table has none; another grain reads its own rows.
     assert client.send("/forecast", SPEC | {"levels": [0.2, 0.8]}, _table(a=HISTORY)).json()["answer"]["coverage"] == []
     far = client.send("/forecast", SPEC | {"horizon": 24, "totals": []}, _table(a=LONG)).json()["answer"]["coverage"]
@@ -338,10 +339,40 @@ def test_covariates_reach_the_model_and_members_with_the_same_ones_go_together(c
     mixed = _table(a={"y": HISTORY, "season": ["low"] * 7 + [None], "price": [1, None, 3, 4, 5, 6, 7, 8]})
     r = client.send("/forecast", spec, mixed)
     assert r.status_code == 200 and kernels.get().chronos.kinds == [{"season": "O", "price": "f"}]
-    # A covariate with a value missing in the periods ahead is not known ahead.
+    # A covariate with a value missing in the periods ahead is not known ahead, and the answer says so for that member;
+    # a member whose rows ahead hold it, or that has no rows ahead, gets no such note.
     table["promotion"][-1] = None
     r = client.send("/forecast", spec, table)
     assert [row["value"] for row in _rows(r.json(), member="c")] == [8.5, 8.5]
+    notes = [a for a in r.json()["answer"]["assumptions"] if a["field"] == "covariates"]
+    assert [(a["member"], a["column"]) for a in notes] == [("c", "promotion")] and "a missing value" in notes[0]["basis"]
+    # Fewer rows ahead than the horizon is the other way a covariate stays past-only.
+    fewer = _table(a={"y": HISTORY, "promotion": [0] * 8})
+    fewer["member"] += ["a"]
+    fewer["period"] += [9]
+    fewer["status"] = ["actual"] * 8 + ["forecast"]
+    fewer["y"] += [None]
+    fewer["promotion"] += [10]
+    notes = [a for a in client.send("/forecast", spec, fewer).json()["answer"]["assumptions"] if a["field"] == "covariates"]
+    assert len(notes) == 1 and "1 rows ahead for a horizon of 2" in notes[0]["basis"]
+
+
+def test_a_series_mostly_made_of_zeros_is_forecast_by_itself(client):
+    spec = {"targets": ["y"], "horizon": 2, "levels": [0.5]}
+    spare = [0, 0, 3, 0, 0, 0, 2, 0]  # six of eight known values are zero
+    busy = [0, 1, 0, 2, 3, 4, 5, 6]  # three of eight
+    r = client.send("/forecast", spec, _table(a=HISTORY, b=HISTORY, spare=spare, busy=busy))
+    assert r.status_code == 200, r.text
+    # One group of three (a, b, busy) and one of one: the spare part went alone, and the answer says so once.
+    assert sorted(size for size, _, _ in kernels.get().chronos.groups) == [1, 3]
+    notes = [x for x in r.json()["answer"]["assumptions"] if x["field"] == "members"]
+    assert len(notes) == 1 and notes[0]["value"] == forecast.MOSTLY_ZERO == 0.5 and notes[0]["count"] == 1 and "by itself" in notes[0]["basis"]
+    # Missing values do not count as zeros; a column of a multi-column member counts for the member.
+    sparse = _table(a=HISTORY, spare={"y": [None, None, 0, 0, 1, 2, 3, 4], "z": [0, 0, 0, 0, 1, 0, 0, 1]})
+    kernels.get().chronos.groups.clear()
+    r = client.send("/forecast", spec | {"targets": ["y", "z"]}, sparse)
+    assert r.status_code == 200 and sorted(size for size, _, _ in kernels.get().chronos.groups) == [1, 1]
+    assert not any(x["field"] == "members" for x in client.send("/forecast", spec, _table(a=HISTORY, b=busy)).json()["answer"].get("assumptions", []))
 
 
 def test_a_member_that_cannot_be_forecast_fails_alone(client):

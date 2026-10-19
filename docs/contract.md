@@ -58,7 +58,10 @@ A route may add fields of its own; they are listed below.
 ## `/forecast`: the periods ahead, or the walk
 
 Chronos-2, as its package ships it, the series of a request forecast
-together in groups of one shape (`docs/forecast.md`, GK-26).
+together in groups of one shape (`docs/forecast.md`, GK-26), except a
+series at least half of whose known values are zero, which is
+forecast by itself (GK-66; `assumptions` says so, `field` `members`,
+with how many such series the request held).
 
 **The table.** Rows with status `actual` are the history. Rows of
 any other status after a member's last actual row are the periods
@@ -71,7 +74,7 @@ answer's `period` is null there.
 
 | Field | Meaning | Absent |
 |---|---|---|
-| `targets` | The columns to forecast. Every other value column is a covariate: its past values ride with the history, and it is known ahead where the member's rows past the last actual hold it for the whole horizon. | required |
+| `targets` | The columns to forecast. Every other value column is a covariate: its past values ride with the history, and it is known ahead where the member's rows past the last actual hold it for the whole horizon. Where a member has rows ahead that do not (a missing value, fewer rows than the horizon), the covariate informs the forecast over the history only, and `assumptions` says so for that member and column (`field` `covariates`). | required |
 | `horizon` | Periods ahead, 1 to 1024. | required, except with `origins`, where it is 1 |
 | `levels` | The quantile levels asked for, each between 0.01 and 0.99, the model's own grid; a level outside it is refused, not answered with the grid's edge under its name. | required |
 | `totals` | Spans in periods: for each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain; the answer's `assumptions` names the value and on what data it was measured (`docs/forecast.md`, GK-45, GK-48). | none |
@@ -107,8 +110,11 @@ it and no others.
 held-out data, at this grain (`docs/forecast.md`, GK-46). One entry
 per step of the horizon and per span asked, per band: `step`, `span`
 (null for a period), `low` and `high` (the levels that bound the
-band), `share` (the actual values inside it) and `points` (how many
-the share counts). The bands measured are 0.10 to 0.90 and 0.05 to
+band), `share` (the actual values inside it), `se` (its standard
+error, clustered by series and by origin), `points` (how many the
+share counts) and `datasets` (how many held-out datasets it pools). A
+share with an error of 0.05 and one with 0.01 are not the same
+knowledge, and a caller's rule reads both numbers. The bands measured are 0.10 to 0.90 and 0.05 to
 0.95; a band the levels do not form, a step past the table (12
 months, 13 weeks, 31 days, 4 quarters) and a span at a dependence
 other than the one it was measured at have no entry. The spans of
