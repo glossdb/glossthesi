@@ -137,7 +137,10 @@ does not pay yet).
 TabICL, the chain-rule density per cell (`docs/misfit.md`, GK-37,
 GK-38). The frame is every column of the table: a frame has no
 member, period or status of its own, and a column so named (an
-invoice's status) is a column like any other.
+invoice's status) is a column like any other. The columns are read
+in the order sent, each against the ones before it and, reversed,
+the ones after, so the order is part of the read: send the columns a
+value is computed from before it (GK-67).
 
 **The specification.**
 
@@ -145,7 +148,7 @@ invoice's status) is a column like any other.
 |---|---|---|
 | `categorical` | Columns to take as categories whatever their values: account numbers, codes. A string or boolean column is a category anyway. | none |
 | `cells` | Whether to answer per cell as well as per row. | false |
-| `folds` | 2 to 10: every row is scored from a context it is not in, at that many times the fits. | 1 |
+| `folds` | 2 to 10: every row is scored from a context it is not in, at that many times the fits. A category seen in the scored fold only gets a probability of one in n + 1 of the rows the conditional was fit on (GK-69). | 1 |
 
 **The answer table.** One row per frame row, in the frame's order.
 

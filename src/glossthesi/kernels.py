@@ -253,7 +253,15 @@ class Kernels:
 
         The orderings default to the port's protocol: identity and
         reverse, so every column conditions both early and late and the
-        read costs two conditionals per column. Not the package's own
+        read costs two conditionals per column. What a column is read
+        against depends on its place among the columns, so the caller's
+        column order is part of the read and the contract says so
+        (GK-67); order-free reads were judged and not taken (GK-68). A
+        category the context never held gets the package's floor of
+        `UNSEEN`, lifted to one in n + 1 of the conditional's training
+        rows, the rule of succession: with `folds`, a category seen in
+        the scored fold only is strange, not minus 23 nats strange
+        (GK-69). Not the package's own
         `score_samples`, whose latin shuffler ignores the count it is
         asked for and returns one ordering per column — sixteen on a
         sixteen-column frame, eight times the work.
@@ -336,8 +344,11 @@ class Kernels:
                 x_train, x_test = noise
             y_train = u.X_[train_mask, col]
             est, is_categorical = u._fit_conditional_estimator(col, x_train, y_train)
-            log_prob = u._log_prob_categorical if is_categorical else u._log_prob_numerical
-            return pi, col, log_prob(est, x_test, xf[:, col])
+            if not is_categorical:
+                return pi, col, u._log_prob_numerical(est, x_test, xf[:, col])
+            lp = u._log_prob_categorical(est, x_test, xf[:, col])
+            # The package's floor for a category the context never held, lifted to one in n + 1 of the training rows.
+            return pi, col, np.where(lp <= np.log(UNSEEN) + 1e-6, np.log(1.0 / (int(train_mask.sum()) + 1)), lp)
 
         workers = workers or misfit_workers(self.device)
         try:
@@ -360,6 +371,7 @@ class Kernels:
 
 
 SPREAD_FLOOR = 1.0  # nats: a column's spread is never taken finer than this
+UNSEEN = 1e-10  # the package's probability for a category the context never held; lifted to 1/(n + 1) in `misfit` (GK-69)
 
 
 def floor_assumption() -> dict:

@@ -26,10 +26,16 @@ finding.
 
 ## How it works
 
-1. **Each cell is read against the row's other columns.** TabICL
+1. **Each cell is read against the columns before it, twice.** TabICL
    gives the density of a number, or the probability of a category,
-   given the rest of the row. A column of text, of true and false,
-   or one named in `categorical` is a category (GK-37).
+   given the columns before it in the order sent, and again in that
+   order reversed; the two log densities are averaged. The order is
+   thus part of the read, and it is the caller's: the order a table is
+   naturally written in, the columns a value is computed from before
+   it, reads best (GK-67; order-free reads were judged and lose on
+   some tables what they gain on others, GK-68). A column of text, of
+   true and false, or one named in `categorical` is a category
+   (GK-37).
 2. **Against its own column** (GK-21). A cell's score is its log
    density minus the median of its column, in units of the column's
    spread, or in nats where the spread is under one nat. A density's
@@ -38,7 +44,10 @@ finding.
 3. **The row's score is its strangest cell** (GK-38), not the sum
    over its cells. Lower is stranger.
 4. **With `folds`,** every row is scored by a model that has not
-   seen it (GK-11).
+   seen it (GK-11). A category seen in the scored fold only is unseen
+   by that model; its probability is lifted from the package's 1e-10
+   to one in n + 1 of the rows the conditional was fit on (since
+   2026-10-19, GK-69).
 
 ## What was tested
 
@@ -102,6 +111,10 @@ to 1.00 against Isolation Forest's 0.54 to 1.00.
 - **A suspicion about a relation needs the join in the frame.** A
   single table cannot show a payment on the wrong invoice.
 - **Name codes as categories:** account numbers, tax codes.
+- **Send the columns in the order a value is computed:** quantity and
+  price before the amount, the plant before its shipping point. Each
+  column is read against the ones before it, so the order is part of
+  the read (GK-67).
 - **A frame needs two rows and two columns.**
 - **Read the column named as "look here",** not as "this cell is
   wrong": where an error breaks a relation between two columns,
@@ -122,7 +135,10 @@ to 1.00 against Isolation Forest's 0.54 to 1.00.
   a caller should send. glossql's limit of 2,000 rows and 16 columns
   rests on an older timing (GK-12).
 - **Real tables with real, labelled errors.** Every error tested was
-  injected.
+  injected. Raha's Hospital, a real table with typos planted in text
+  fields, was read (GK-70): the route finds them no better than
+  chance. A typo is a category seen once, not a relation broken
+  between columns; a string check is the tool for it.
 
 ## What was read
 
