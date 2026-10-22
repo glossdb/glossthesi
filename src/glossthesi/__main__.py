@@ -39,22 +39,33 @@ def main() -> None:
             "insecure_open", extra={"caller": app.INSECURE_DEV_MODE, "says": "GLOSSTHESI_INSECURE_OPEN: the doors are open, nobody is verified"}
         )
     config = uvicorn.Config("glossthesi.app:app", host=host or "127.0.0.1", port=int(port), log_config=None)
-    _Server(config).run()
+    _Server(config, app.DRAINING, telemetry.log).run()
 
 
 class _Server(uvicorn.Server):
     """uvicorn's server, which on SIGTERM stops accepting and waits for
     what is in flight; here the doors are told first, so a request on a
     kept connection is sent back to retry rather than served on a
-    stopping instance."""
+    stopping instance. The signal handler only sets the two flags: it
+    runs between two bytecodes of the main thread and may be entered
+    again before it returns — uv forwards the SIGTERM it was sent, so a
+    `pkill -f` delivers two a few microseconds apart — and a lock or a
+    stream the outer entry held would stop the main thread, and with it
+    the loop that answers and exits (glossval GV-30). The log line is
+    written from the loop, as the drain begins."""
+
+    def __init__(self, config: uvicorn.Config, draining, log) -> None:
+        super().__init__(config)
+        self._draining = draining
+        self._log = log
 
     def handle_exit(self, sig, frame) -> None:
-        from . import telemetry
-        from .app import DRAINING
-
-        DRAINING.set()
-        telemetry.log.info("draining", extra={"signal": int(sig)})
+        self._draining.set()
         super().handle_exit(sig, frame)
+
+    async def shutdown(self, sockets=None) -> None:
+        self._log.info("draining", extra={"signals": [int(s) for s in self._captured_signals]})
+        await super().shutdown(sockets=sockets)
 
 
 if __name__ == "__main__":

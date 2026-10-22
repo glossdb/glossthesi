@@ -63,10 +63,29 @@ _OWNER_LOCK = threading.Lock()
 # Arrow stream decodes to, batch by batch — a compressed stream may be many times its wire size (wire.parse).
 MAX_BODY_MB = int(os.environ.get("GLOSSTHESI_MAX_BODY_MB", "") or 32)
 
+
+class _Flag:
+    """A flag set from a signal handler, so it takes no lock: the handler
+    may be entered again before it returns, and a lock the outer entry
+    holds then stops the main thread for good (`__main__._Server`,
+    glossval GV-30). A bool written under the GIL needs none."""
+
+    __slots__ = ("_set",)
+
+    def __init__(self) -> None:
+        self._set = False
+
+    def set(self) -> None:
+        self._set = True
+
+    def is_set(self) -> bool:
+        return self._set
+
+
 # Set when the host has asked the process to stop: what is in flight is
 # finished, and a request arriving on a kept connection is sent back to
 # retry (a 503 with `Retry-After`) — the host has already moved traffic.
-DRAINING = threading.Event()
+DRAINING = _Flag()
 
 
 def owner() -> Owner:
