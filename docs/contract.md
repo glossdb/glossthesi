@@ -151,6 +151,9 @@ value is computed from before it (GK-67).
 | `folds` | 2 to 10: every row is scored from a context it is not in, at that many times the fits. A category seen in the scored fold only gets a probability of one in n + 1 of the rows the conditional was fit on (GK-69). | 1 |
 
 **The answer table.** One row per frame row, in the frame's order.
+The scores move a little with the order of the rows: the same table
+sent with its rows in another order ranks them nearly, not exactly,
+the same — the model's own, not a bug to report (GK-73).
 
 | Column | Meaning |
 |---|---|
