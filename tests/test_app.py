@@ -4,7 +4,9 @@ shape, the specification's fields, errors in place, refusals."""
 import asyncio
 import io
 import json
-import threading
+import subprocess
+import sys
+import textwrap
 import time
 
 import httpx
@@ -589,11 +591,51 @@ def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
 
 
 def test_a_draining_instance_sends_requests_back_to_retry(client, monkeypatch):
-    monkeypatch.setattr(app_module, "DRAINING", threading.Event())
+    monkeypatch.setattr(app_module, "DRAINING", type(app_module.DRAINING)())
     app_module.DRAINING.set()
     r = client.send("/misfit", {}, MISFIT)
     assert r.status_code == 503 and r.headers["retry-after"] == "2" and "retry" in r.json()["error"]
     assert client.get("/healthz").status_code == 200
+
+
+def test_the_signal_handler_returns_when_entered_again_at_any_line_of_itself():
+    """A signal handler runs between two bytecodes of the main thread and may be entered again before it returns: uv
+    forwards the SIGTERM it was sent, so a `pkill -f` delivers the service two a few microseconds apart. Whichever line
+    of the first the second lands on, both have to return, or the main thread — the loop that would answer and exit —
+    is gone for good (GV-30: three hours with the port open and nothing answered, `kill -9` the only way out). Here the
+    second entry is forced at every line of the first; in a subprocess, so a hang fails the test instead of hanging it."""
+    script = textwrap.dedent(
+        """
+        import signal, sys, uvicorn
+        from glossthesi import app, telemetry
+        from glossthesi.__main__ import _Server
+
+        server = _Server(uvicorn.Config("glossthesi.app:app"), app.DRAINING, telemetry.log)
+        nested = 0
+
+        def again(frame, event, arg):
+            global nested
+            if event == "line" and not nested:
+                nested += 1
+                server.handle_exit(signal.SIGTERM, None)  # the second signal, landing on this line of the first
+                nested -= 1
+            return again
+
+        sys.settrace(again)
+        server.handle_exit(signal.SIGTERM, None)
+        sys.settrace(None)
+        print("RETURNED", app.DRAINING.is_set(), server.should_exit, sorted({int(s) for s in server._captured_signals}), len(server._captured_signals))
+        """
+    )
+    try:
+        run = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=90)
+    except subprocess.TimeoutExpired:
+        pytest.fail("the handler, entered again while it ran, never returned")
+    assert run.returncode == 0, run.stderr
+    returned = [line for line in run.stdout.splitlines() if line.startswith("RETURNED")]
+    assert returned, run.stdout
+    _, flag, should_exit, signals, count = returned[-1].split(maxsplit=4)
+    assert (flag, should_exit, signals) == ("True", "True", "[15]") and int(count) > 2, returned[-1]
 
 
 def test_healthz(client):
