@@ -8,7 +8,7 @@ it over HTTP.
 
 | Task | Route | Model |
 |---|---|---|
-| Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
+| Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point and its verdict | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
 | Anomaly detection in a table: errors that break a relation between columns | `/misfit` | TabICL (`tabicl` at a pinned version): the regressor for numeric columns, the classifier for categorical ones |
 | What-if: which way a column has moved with one or several changed inputs in the member's own history, where the model agrees, with the reason, the model's and the history's estimate, and the error on a held-back period (`docs/whatif.md`) | `/whatif` | TabICL's forecaster, as its package ships it, and the series' own history |
 
@@ -61,7 +61,7 @@ the fields to repair where the specification is at fault.
 
 | route | specification | answer table |
 |---|---|---|
-| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed; the answer object's `coverage` says how often each band held on held-out data at that grain and step |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest, `threshold` its red line | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed, or `withheld` why the PIT says nothing; the answer object's `coverage` says how often each band held on held-out data at that grain and step, and with `origins` its `walk` carries the verdict: per member the held shares and the newest point, one score and band over all |
 | `POST /misfit` | `categorical`, `cells`, `folds` | a row per frame row: `score`, and with `cells` a column per frame column |
 | `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `checkpoints`, `owner` |
 

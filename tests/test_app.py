@@ -438,12 +438,55 @@ def test_the_walk_forecasts_the_last_periods_from_the_history_before_them_and_re
     assert total[0]["actual"] == 23 and total[0]["period"] == 12 and total[0]["pit"] is None
 
 
+def test_the_walk_answers_its_verdict_and_withholds_a_pit_read_on_a_grid(client):
+    spec = {"targets": ["y"], "origins": 3, "levels": [0.1, 0.5, 0.9]}
+    grid = [10, 20] * 6  # a series on a grid of step 10
+    r = client.send("/forecast", spec, _table(a=LONG, flat=[10] * 11 + [10.5], grid=grid))
+    assert r.status_code == 200, r.text
+    got = r.json()
+    # The grid: the fake's corridor is 0.8 wide around last + 0.5. An actual within a step of that median says nothing, and the
+    # point says why; the one further off than a step is a real move whatever the corridor, and keeps its PIT.
+    g = _rows(got, member="grid")
+    assert [row["pit"] for row in g[::3]] == [None, 0.0, None]
+    assert g[0]["withheld"] == "corridor 8.000e-01 is narrower than the series' resolution 1.000e+01 and the actual sits within it"
+    assert g[3]["withheld"] is None and g[6]["withheld"] == g[0]["withheld"]
+    # A constant history whose actual equals it withholds too; the one point that moves off it keeps its PIT.
+    f = _rows(got, member="flat")
+    assert [(row["pit"], row["withheld"]) for row in f[::3]] == [
+        (None, "the training series is constant and the actual equals it"),
+        (None, "the training series is constant and the actual equals it"),
+        (0.5, None),
+    ]
+    assert all(row["withheld"] is None for row in _rows(got, member="a"))
+    # The verdict: per member the held shares over the points with a PIT and the newest point; one score over the newest points scored.
+    walk = got["answer"]["walk"]
+    assert [(m["member"], m["walked"], m["held_80"], m["held_90"]) for m in walk["members"]] == [
+        ("a", 3, 0.0, 0.0),
+        ("flat", 3, 1.0, 1.0),
+        ("grid", 3, 0.0, 0.0),
+    ]
+    assert [m["newest"] for m in walk["members"]] == [
+        {"origin": 11, "period": 12, "pit": 1.0, "displacement": 1.0, "withheld": None},
+        {"origin": 11, "period": 12, "pit": 0.5, "displacement": 0.0, "withheld": None},
+        {"origin": 11, "period": 12, "pit": None, "displacement": None, "withheld": g[0]["withheld"]},
+    ]
+    # Two members scored, the worst at 1.0: 1.0 squared is past the default red line.
+    assert (walk["score"], walk["band"], walk["threshold"]) == (1.0, "red", 0.98)
+    assert any(a["field"] == "walk" and a["threshold"] == 0.98 for a in got["answer"]["assumptions"])
+    # A threshold of 1 makes the same score orange; a series whose actual lands on its median scores green alone.
+    assert client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["walk"]["band"] == "orange"
+    alone = client.send("/forecast", spec, _table(flat=[10] * 11 + [10.5])).json()["answer"]["walk"]
+    assert (alone["score"], alone["band"]) == (0.0, "green")
+    # Nothing walked carries no verdict: a forecast ahead has no `walk`.
+    assert "walk" not in client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]
+
+
 def test_forecast_refusals(client):
     base = _table(a=HISTORY)
     for change, word in (
         ({"targets": []}, "targets"), ({"targets": ["z"]}, "no value column"), ({"targets": ["y", "y"]}, "twice"), ({"horizon": 0}, "horizon"), ({"horizon": 2.5}, "horizon"),
         ({"levels": [1.0]}, "levels"), ({"levels": [0.005, 0.5]}, "the model's own grid"), ({"totals": [4]}, "totals"), ({"grain": "fortnight"}, "grain"), ({"width": 0}, "width"), ({"width": "wide"}, "width"),
-        ({"width": [1, None, 1]}, "width"), ({"origins": 0}, "origins"), ({"origins": []}, "origins"),
+        ({"width": [1, None, 1]}, "width"), ({"origins": 0}, "origins"), ({"origins": []}, "origins"), ({"threshold": 2}, "threshold"), ({"threshold": True}, "threshold"),
     ):  # fmt: skip
         r = client.send("/forecast", SPEC | change, base)
         assert r.status_code == 400 and word in r.json()["error"], (change, r.text)

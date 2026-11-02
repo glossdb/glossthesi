@@ -80,7 +80,8 @@ answer's `period` is null there.
 | `totals` | Spans in periods: for each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain; the answer's `assumptions` names the value and on what data it was measured (`docs/forecast.md`, GK-45, GK-48). | none |
 | `grain` | `month`, `week`, `day` or `quarter`: only the interval of a total depends on it, and `coverage` reads the grain's table. Every grain's dependence is measured, and the answer says on what data (GK-45, GK-48). | `month` |
 | `width` | The distance of every quantile from the median is multiplied by it after the model has answered, for a caller whose record says this dataset's intervals run too narrow or too wide: one number, or one per period ahead. The rule for learning it from a record is `glossthesi.forecast.learned_width` (GK-35). | 1 |
-| `origins` | The walk, or a backtest: a number k, the k actual periods before every member's last each taken as an origin, so that every period walked has its actual value; or a list of periods, the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it, with the covariates' later values taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT. | one forecast per member, from its last actual period |
+| `origins` | The walk, or a backtest: a number k, the k actual periods before every member's last each taken as an origin, so that every period walked has its actual value; or a list of periods, the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it, with the covariates' later values taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT, and the answer object carries the walk's verdict (`walk`, below). | one forecast per member, from its last actual period |
+| `threshold` | The walk's red line: the score past which its band is `red`, above zero and at most 1. | 0.98 |
 
 **The answer table.** One row per member, origin, step, column and
 level.
@@ -96,7 +97,8 @@ level.
 | `level` | The quantile level. |
 | `value` | The quantile. |
 | `actual` | The target's value at that period where the table holds it, else null. The same on every level row of the point. |
-| `pit` | The quantile at which the actual landed in the model's own distribution, 0 to 1, read against the raw answer before any `width`; null without an actual. The same on every level row of the point. |
+| `pit` | The quantile at which the actual landed in the model's own distribution, 0 to 1, read against the raw answer before any `width`; null without an actual, and null where `withheld` says why. The same on every level row of the point. |
+| `withheld` | Why the point's PIT says nothing, else null. A series that repeats values moves on a grid (a ratio over a fixed field, a count), and the smallest gap between two of its values is the grid's step: a corridor — the distance between the outermost levels asked — narrower than that step, with the actual within a step of the model's median, is the model's noise around a value the series takes exactly; a constant history whose actual equals it is the same case. An actual further off than a step is a real move whatever the corridor, and keeps its PIT; a series that never repeats has no grid. The same on every level row of the point. |
 
 A member that cannot be forecast fails alone, and so does one of its
 targets and one origin: the failure is in `answer.errors` with the
@@ -124,13 +126,31 @@ days and quarters stand at a dependence fitted on the same datasets
 caller whose own record of forecasts and actual values is long enough
 reads that first.
 
+**The walk's verdict.** With `origins`, the answer object carries
+`walk`: per member and target (`members`), how many points were
+walked, `held_80` and `held_90` — the share of the walked points with
+a PIT that landed inside the 10-90 and the 5-95 band — and the
+`newest` point one step ahead of the latest origin: its origin, its
+period, its PIT, its `displacement` (|2·pit − 1|: 0 at the median,
+0.8 at the 10-90 band's edge, 0.9 at the 5-95 band's) and `withheld`
+where it says nothing. Over the newest points scored — those with a
+PIT — one `score`, the worst displacement raised to their number, so
+that the edges keep their base rate at any count, and its `band`:
+`green` to 0.8, `yellow` to 0.9, `orange` to the `threshold`, `red`
+past it; nothing scored is 0.0, green. The rule and the threshold are
+in `assumptions` (`field` `walk`). The verdict is the service's: the
+caller lands it and routes on it, and keeps no rule of its own.
+
 **The walk as glossql declares it.** One member per metric, one
 value column, no covariates, `origins` 6, `horizon` 1, the levels of
-the bands. The answer holds per metric and walked period the bands,
-the actual and the PIT. The record of PITs stays on glossql's side;
-the service reads no record. A dataset whose record says the bands
-run narrow sends a `width` (GK-35: on records of one to two years it
-does not pay yet).
+the bands, every period sent complete: the calendar is the caller's,
+so a period the data's edge falls inside is not sent, and the newest
+point walked is the newest whole one. The answer holds per metric and
+walked period the bands, the actual, the PIT or why it is withheld,
+and the verdict. The record of walks stays on glossql's side; the
+service reads no record. A dataset whose record says the bands run
+narrow sends a `width` (GK-35: on records of one to two years it does
+not pay yet).
 
 ## `/misfit`: errors that break a relation between columns
 
@@ -380,23 +400,23 @@ The kernel draft's "one general service call" is this contract: a
 table in, a table out, Arrow IPC, the service's name and version on
 every answer, one URL per point.
 
-**The walk (`metric_bands`, `metric_band_walk`).** Send
-`metric_series()` at month grain as the one table: `member` the
-metric's name, `period` the month, one value column, every row
-`actual`; the specification `{"targets": ["value"], "origins": 6,
-"horizon": 1, "levels": [0.05, 0.1, 0.5, 0.9, 0.95]}`. Receive per
-metric and walked period the five band values (one row per level),
-the `actual` and the `pit`. A metric whose history is too short for
-an origin is in `answer.errors` with the reason, and the origins it
-does have are walked: the service needs six known values behind an
-origin, so a full walk of six needs twelve months and a metric of
-eight months gets two walked periods. The `withheld` and `partial`
-rules stay glossql's: the service places a tied actual (a series on
-a grid) at the midpoint of the tied levels, and says nothing about
-the calendar. The record of PITs stays glossql's; the service reads
-none. The bands are the model's own; the detector's threshold was
-set on TabICL's bands and is re-read against the walk's coverage on
-the record (`docs/forecast.md`, GK-42).
+**The walk (`metric_bands`).** Send the metric series at month
+grain as the one table, complete months only: `member` the metric's
+name, `period` the month, one value column, every row `actual`; the
+specification `{"targets": ["value"], "origins": 6, "horizon": 1,
+"levels": [0.05, 0.1, 0.5, 0.9, 0.95]}`, and `threshold` where the
+record names one. Receive per metric and walked period the five band
+values (one row per level), the `actual`, the `pit` or `withheld`,
+and in the answer object the walk's verdict: the held shares and the
+newest point per metric, one score and band over all. A metric whose
+history is too short for an origin is in `answer.errors` with the
+reason, and the origins it does have are walked: the service needs
+six known values behind an origin, so a full walk of six needs twelve
+months and a metric of eight months gets two walked periods. The
+service owns the walk's rules — the withheld rule, the displacement,
+the score and its bands; the calendar is the caller's, which sends no
+partial period. The record of walks stays glossql's; the service
+reads none. The bands are the model's own.
 
 May go: the feature recipe and the point-in-time fills in
 `crates/session/src/search/bands.rs`, `BandRead` and `band_points`
@@ -428,6 +448,3 @@ glossql's call.
 `GLOSSQL_TABICL_URL` goes. The bearer as today: a key, or an ID
 token for the service's audience.
 
-**Two facts the kernel draft has wrong:** the walk's row design has one copy, in Rust, and is not
-reproduced; the current service ignores `actual` and `pit_history`,
-so the walk's PIT is NaN today.
