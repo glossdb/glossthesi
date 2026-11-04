@@ -64,12 +64,6 @@ class Fake:
             out.append(np.nanmean(job.y) + effect * (job.future["x"] - np.nanmean(job.inputs["x"]))[:, None] + (np.asarray(levels) - 0.5)[None, :])
         return out
 
-    def misfit(self, x, columns=False, folds=1, categorical=None):
-        self.table, self.categorical = x, categorical
-        scores = np.array([0.1, float("nan")])
-        shares = np.array([[0.3, -0.2], [float("nan"), 1.0]] if x.shape[0] == 2 else [[float("nan")] * x.shape[1]] * x.shape[0])
-        return (scores, shares) if columns else scores
-
 
 class _Sync:
     """httpx's ASGI transport is async; the tests read better synchronous."""
@@ -139,7 +133,11 @@ def _rows(answer, **where):
 
 
 SPEC = {"targets": ["y"], "horizon": 3, "levels": [0.1, 0.5, 0.9], "totals": [3]}
-MISFIT = {"a": [1, 3], "b": [2, 4]}
+
+
+def _knock(client, **kw):
+    """Any door: a forecast of one member, for the tests of the gate and of the plumbing around a read."""
+    return client.send("/forecast", SPEC, _table(a=HISTORY), **kw)
 
 
 def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client):
@@ -438,12 +436,55 @@ def test_the_walk_forecasts_the_last_periods_from_the_history_before_them_and_re
     assert total[0]["actual"] == 23 and total[0]["period"] == 12 and total[0]["pit"] is None
 
 
+def test_the_walk_answers_its_verdict_and_withholds_a_pit_read_on_a_grid(client):
+    spec = {"targets": ["y"], "origins": 3, "levels": [0.1, 0.5, 0.9]}
+    grid = [10, 20] * 6  # a series on a grid of step 10
+    r = client.send("/forecast", spec, _table(a=LONG, flat=[10] * 11 + [10.5], grid=grid))
+    assert r.status_code == 200, r.text
+    got = r.json()
+    # The grid: the fake's corridor is 0.8 wide around last + 0.5. An actual within a step of that median says nothing, and the
+    # point says why; the one further off than a step is a real move whatever the corridor, and keeps its PIT.
+    g = _rows(got, member="grid")
+    assert [row["pit"] for row in g[::3]] == [None, 0.0, None]
+    assert g[0]["withheld"] == "corridor 8.000e-01 is narrower than the series' resolution 1.000e+01 and the actual sits within it"
+    assert g[3]["withheld"] is None and g[6]["withheld"] == g[0]["withheld"]
+    # A constant history whose actual equals it withholds too; the one point that moves off it keeps its PIT.
+    f = _rows(got, member="flat")
+    assert [(row["pit"], row["withheld"]) for row in f[::3]] == [
+        (None, "the training series is constant and the actual equals it"),
+        (None, "the training series is constant and the actual equals it"),
+        (0.5, None),
+    ]
+    assert all(row["withheld"] is None for row in _rows(got, member="a"))
+    # The verdict: per member the held shares over the points with a PIT and the newest point; one score over the newest points scored.
+    walk = got["answer"]["walk"]
+    assert [(m["member"], m["walked"], m["held_80"], m["held_90"]) for m in walk["members"]] == [
+        ("a", 3, 0.0, 0.0),
+        ("flat", 3, 1.0, 1.0),
+        ("grid", 3, 0.0, 0.0),
+    ]
+    assert [m["newest"] for m in walk["members"]] == [
+        {"origin": 11, "period": 12, "pit": 1.0, "displacement": 1.0, "withheld": None},
+        {"origin": 11, "period": 12, "pit": 0.5, "displacement": 0.0, "withheld": None},
+        {"origin": 11, "period": 12, "pit": None, "displacement": None, "withheld": g[0]["withheld"]},
+    ]
+    # Two members scored, the worst at 1.0: 1.0 squared is past the default red line.
+    assert (walk["score"], walk["band"], walk["threshold"]) == (1.0, "red", 0.98)
+    assert any(a["field"] == "walk" and a["threshold"] == 0.98 for a in got["answer"]["assumptions"])
+    # A threshold of 1 makes the same score orange; a series whose actual lands on its median scores green alone.
+    assert client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["walk"]["band"] == "orange"
+    alone = client.send("/forecast", spec, _table(flat=[10] * 11 + [10.5])).json()["answer"]["walk"]
+    assert (alone["score"], alone["band"]) == (0.0, "green")
+    # Nothing walked carries no verdict: a forecast ahead has no `walk`.
+    assert "walk" not in client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]
+
+
 def test_forecast_refusals(client):
     base = _table(a=HISTORY)
     for change, word in (
         ({"targets": []}, "targets"), ({"targets": ["z"]}, "no value column"), ({"targets": ["y", "y"]}, "twice"), ({"horizon": 0}, "horizon"), ({"horizon": 2.5}, "horizon"),
         ({"levels": [1.0]}, "levels"), ({"levels": [0.005, 0.5]}, "the model's own grid"), ({"totals": [4]}, "totals"), ({"grain": "fortnight"}, "grain"), ({"width": 0}, "width"), ({"width": "wide"}, "width"),
-        ({"width": [1, None, 1]}, "width"), ({"origins": 0}, "origins"), ({"origins": []}, "origins"),
+        ({"width": [1, None, 1]}, "width"), ({"origins": 0}, "origins"), ({"origins": []}, "origins"), ({"threshold": 2}, "threshold"), ({"threshold": True}, "threshold"),
     ):  # fmt: skip
         r = client.send("/forecast", SPEC | change, base)
         assert r.status_code == 400 and word in r.json()["error"], (change, r.text)
@@ -476,49 +517,12 @@ def test_forecast_refusals(client):
     assert r.status_code == 400
 
 
-def test_misfit_serves_how_far_each_cell_lies_below_its_column(client):
-    # The fake's shares are [[0.3, -0.2], [nan, 1.0]]: centered by column (0.3 and 0.4) in nats, the spreads being under a nat.
-    r = client.send("/misfit", {}, MISFIT)
-    assert r.status_code == 200, r.text
-    assert r.json()["table"] == {"row": [0, 1], "score": [pytest.approx(-0.6), pytest.approx(0.6)]}
-    # The answer declares the floor the score rests on.
-    assert r.json()["answer"] == {"service": "glossthesi", "version": "dev", "errors": [], "assumptions": [kernels.floor_assumption()]}
-    assert kernels.floor_assumption()["floor_nats"] == kernels.SPREAD_FLOOR
-    got = client.send("/misfit", {"cells": True}, MISFIT).json()["table"]
-    assert got["a"] == [pytest.approx(0.0), None] and got["b"] == [pytest.approx(-0.6), pytest.approx(0.6)]
-    # A row without a share is null, not a number. A frame has no reserved names: a column called `status` is a column of it.
-    r = client.send("/misfit", {}, {"status": ["open", "paid", "open"], "a": [1, 3, 5], "b": [2, 4, 6]})
-    assert (
-        r.status_code == 200 and r.json()["table"]["score"] == [None, None, None] and kernels.get().table.shape == (3, 3) and kernels.get().categorical == [0]
-    )
-    for spec, word in (({"cells": "yes"}, "cells"), ({"folds": 0}, "folds"), ({"categorical": ["z"]}, "no column `z`"), ({"categorical": "a"}, "categorical")):
-        r = client.send("/misfit", spec, MISFIT)
-        assert r.status_code == 400 and word in r.json()["error"], (spec, r.text)
-    r = client.send("/misfit", {}, {"a": [1, 2]})
-    assert r.status_code == 400 and "two of each" in r.json()["error"]
-
-
-def test_misfit_takes_categories_as_text_or_by_name(client):
-    r = client.send("/misfit", {}, {"k": ["b", "a", ""], "n": [1, None, 3], "f": [True, False, True], "v": [7, 7, 8]})
-    assert r.status_code == 200, r.text
-    k = kernels.get()
-    assert k.categorical == [0, 2] and np.array_equal(
-        np.isnan(k.table), [[False, False, False, False], [False, True, False, False], [True, False, False, False]]
-    )
-    assert k.table[:, 0].tolist()[:2] == [1.0, 0.0] and k.table[:, 2].tolist() == [1.0, 0.0, 1.0] and k.table[:, 3].tolist() == [7.0, 7.0, 8.0]
-    # A numeric column named categorical is coded by its values as text.
-    r = client.send("/misfit", {"categorical": ["account"]}, {"account": [4000, 4010], "rate": [1.5, 2.5]})
-    assert r.status_code == 200 and k.categorical == [0] and k.table[:, 0].tolist() == [0.0, 1.0]
-    r = client.arrow("/misfit", {"categorical": ["account"]}, {"account": [4000, 4010], "rate": [1.5, 2.5]})
-    assert r.status_code == 200 and k.table[:, 0].tolist() == [0.0, 1.0]
-
-
 def test_keys_gate_when_set(client, monkeypatch):
     monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_KEYS", "k1, k2")
-    assert client.send("/misfit", {}, MISFIT).status_code == 401
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer nope"}).status_code == 401
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer k2"}).status_code == 200
+    assert _knock(client).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer nope"}).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer k2"}).status_code == 200
 
 
 def test_nothing_is_served_where_nothing_says_who_may_call(client, monkeypatch):
@@ -529,7 +533,7 @@ def test_nothing_is_served_where_nothing_says_who_may_call(client, monkeypatch):
     monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     for name in ("GLOSSTHESI_KEYS", "GLOSSTHESI_AUDIENCE", "GLOSSTHESI_CALLERS"):
         monkeypatch.delenv(name, raising=False)
-    r = client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer anything"})
+    r = _knock(client, headers={"authorization": "Bearer anything"})
     assert r.status_code == 401 and "GLOSSTHESI_INSECURE_OPEN=true" in r.json()["error"]
     assert client.get("/healthz").status_code == 200  # outside the gate, as before
     with pytest.raises(SystemExit, match="GLOSSTHESI_INSECURE_OPEN=true"):
@@ -537,9 +541,9 @@ def test_nothing_is_served_where_nothing_says_who_may_call(client, monkeypatch):
     # Only the literal `true` opens the doors: the switch is a statement, never a fallback.
     for said in ("1", "TRUE", "yes", "false", ""):
         monkeypatch.setenv("GLOSSTHESI_INSECURE_OPEN", said)
-        assert client.send("/misfit", {}, MISFIT).status_code == 401
+        assert _knock(client).status_code == 401
     monkeypatch.setenv("GLOSSTHESI_INSECURE_OPEN", " true ")
-    assert client.send("/misfit", {}, MISFIT).status_code == 200 and app_module.arrangement() == "insecure-open"
+    assert _knock(client).status_code == 200 and app_module.arrangement() == "insecure-open"
 
 
 def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
@@ -547,7 +551,7 @@ def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
     account passes; the verifier is asked once per token until it expires."""
     monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_AUDIENCE", "https://service.example")
-    monkeypatch.setenv("GLOSSTHESI_CALLERS", "glossql@proj.iam.gserviceaccount.com")
+    monkeypatch.setenv("GLOSSTHESI_CALLERS", "glossdb@proj.iam.gserviceaccount.com")
     monkeypatch.setattr(app_module, "_TOKENS", {})
     asked = []
 
@@ -555,21 +559,21 @@ def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
         asked.append(token)
         assert audience == "https://service.example"
         if token == "good":
-            return "glossql@proj.iam.gserviceaccount.com", time.time() + 3600
+            return "glossdb@proj.iam.gserviceaccount.com", time.time() + 3600
         if token == "other":
             return "someone@else.iam.gserviceaccount.com", time.time() + 3600
         raise ValueError("not ours")
 
     monkeypatch.setattr(app_module, "_verify_id_token", verify)
-    assert client.send("/misfit", {}, MISFIT).status_code == 401
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer forged"}).status_code == 401
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer other"}).status_code == 401
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer good"}).status_code == 200
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer good"}).status_code == 200
+    assert _knock(client).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer forged"}).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer other"}).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer good"}).status_code == 200
+    assert _knock(client, headers={"authorization": "Bearer good"}).status_code == 200
     assert asked == ["forged", "other", "good"]
     # A shared key is not accepted once an audience is set.
     monkeypatch.setenv("GLOSSTHESI_KEYS", "k1")
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer k1"}).status_code == 401
+    assert _knock(client, headers={"authorization": "Bearer k1"}).status_code == 401
 
 
 def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
@@ -580,12 +584,12 @@ def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", list(root.handlers))
     telemetry.configure("test")
-    monkeypatch.setattr(app_module.Misfit, "parse", staticmethod(lambda table, spec: 1 / 0))
-    r = client.send("/misfit", {}, MISFIT)
+    monkeypatch.setattr(app_module.Forecast, "parse", staticmethod(lambda table, spec: 1 / 0))
+    r = _knock(client)
     assert r.status_code == 500 and r.json() == {"error": "the service failed: ZeroDivisionError"}
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
     failed = next(line for line in lines if line["event"] == "request_failed")
-    assert failed["severity"] == "ERROR" and failed["route"] == "/misfit" and "ZeroDivisionError" in failed["traceback"]
+    assert failed["severity"] == "ERROR" and failed["route"] == "/forecast" and "ZeroDivisionError" in failed["traceback"]
     refused = next(line for line in lines if line["event"] == "refused")
     assert refused["status"] == 500 and refused["caller"] == "insecure_dev_mode"
 
@@ -593,7 +597,7 @@ def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
 def test_a_draining_instance_sends_requests_back_to_retry(client, monkeypatch):
     monkeypatch.setattr(app_module, "DRAINING", type(app_module.DRAINING)())
     app_module.DRAINING.set()
-    r = client.send("/misfit", {}, MISFIT)
+    r = _knock(client)
     assert r.status_code == 503 and r.headers["retry-after"] == "2" and "retry" in r.json()["error"]
     assert client.get("/healthz").status_code == 200
 
@@ -641,7 +645,7 @@ def test_the_signal_handler_returns_when_entered_again_at_any_line_of_itself():
 def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200 and r.json()["device"] == "fake" and r.json()["version"] == "dev" and r.json()["service"] == "glossthesi"
-    client.send("/misfit", {}, MISFIT)
+    _knock(client)
     own = client.get("/healthz").json()["owner"]
     assert own["cycles"] == 1 and own["jobs"] == 1 and own["last_cycle_at"] > 0 and own["waiting_cells"] == 0
 
@@ -654,13 +658,13 @@ def test_a_full_queue_answers_429_with_retry_after(client, monkeypatch):
             raise Busy("the service's queue is full — retry shortly", retry_after=7)
 
     monkeypatch.setattr(app_module, "_OWNER", Full())
-    r = client.send("/misfit", {}, MISFIT)
+    r = _knock(client)
     assert r.status_code == 429 and r.headers["retry-after"] == "7" and "full" in r.json()["error"]
 
 
 def test_a_body_over_the_cap_is_refused_before_it_is_parsed(client, monkeypatch):
     monkeypatch.setattr(app_module, "MAX_BODY_MB", 0)
-    r = client.send("/misfit", {}, MISFIT)
+    r = _knock(client)
     assert r.status_code == 413 and "in parts" in r.json()["error"]
 
 
@@ -844,10 +848,10 @@ def test_a_key_is_named_by_its_place_and_never_written_to_the_log(client, monkey
     monkeypatch.setenv("GLOSSTHESI_KEYS", "s3cr3t-one, s3cr3t-two")
     bearer = {"authorization": "Bearer s3cr3t-two"}
     # A refusal, a failure and a wrong key: every line names the caller by its place, none holds a key.
-    assert client.post("/misfit", content=b"x", headers={"content-type": "text/plain", **bearer}).status_code == 400
-    monkeypatch.setattr(app_module.Misfit, "parse", staticmethod(lambda table, spec: 1 / 0))
-    assert client.send("/misfit", {}, MISFIT, headers=bearer).status_code == 500
-    assert client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer s3cr3t-three"}).status_code == 401
+    assert client.post("/forecast", content=b"x", headers={"content-type": "text/plain", **bearer}).status_code == 400
+    monkeypatch.setattr(app_module.Forecast, "parse", staticmethod(lambda table, spec: 1 / 0))
+    assert _knock(client, headers=bearer).status_code == 500
+    assert _knock(client, headers={"authorization": "Bearer s3cr3t-three"}).status_code == 401
     out = capsys.readouterr().out
     assert "s3cr3t" not in out
     lines = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
@@ -862,7 +866,7 @@ def test_an_audience_with_nobody_allowed_is_nothing_arranged(client, monkeypatch
     for name in ("GLOSSTHESI_CALLERS", "GLOSSTHESI_KEYS"):
         monkeypatch.delenv(name, raising=False)
     assert app_module.arrangement() is None
-    r = client.send("/misfit", {}, MISFIT, headers={"authorization": "Bearer a-token"})
+    r = _knock(client, headers={"authorization": "Bearer a-token"})
     assert r.status_code == 401 and "GLOSSTHESI_CALLERS" in r.json()["error"]
     with pytest.raises(SystemExit, match="GLOSSTHESI_CALLERS"):
         entry.main()
@@ -892,7 +896,7 @@ def test_a_body_without_a_declared_length_is_stopped_at_the_cap(client, monkeypa
             pulled.append(i)
             yield b"x" * 16
 
-    r = client.post("/misfit", content=chunks(), headers={"content-type": wire.JSON})
+    r = client.post("/forecast", content=chunks(), headers={"content-type": wire.JSON})
     assert r.status_code == 413 and "in parts" in r.json()["error"]
     assert pulled == [0]  # refused at the first chunk over the cap, the rest never read
 

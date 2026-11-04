@@ -1,9 +1,8 @@
 """The doors of the service: one table and a specification in, one
 table and an answer out (`docs/contract.md`, `wire.py`).
 
-Three reads on the one table — `/forecast` for the periods ahead and
-the walk, `/misfit` for the rows that break a relation between
-columns, `/whatif` for which way a column moves under a changed
+Two reads on the one table — `/forecast` for the periods ahead and
+the walk, `/whatif` for which way a column moves under a changed
 input — and `/healthz`. Nothing here knows about datasets, metrics
 or actors: a request is numbers and a key.
 
@@ -22,7 +21,7 @@ the request counts against:
   test host). The caller is the key's place in the list (`key-1`),
   never the key itself: the caller's name goes to the logs.
 - neither: every request is refused, and the service does not start.
-- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossql.
+- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossdb.
   The doors serve without authentication and every caller is recorded
   as `insecure_dev_mode`. The name is the warning: a laptop trying the
   service out, never a deployment.
@@ -106,7 +105,7 @@ def _keys() -> list[str]:
     return [k.strip() for k in os.environ.get("GLOSSTHESI_KEYS", "").split(",") if k.strip()]
 
 
-INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossql's name for it
+INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossdb's name for it
 UNARRANGED = (
     "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
     "GLOSSTHESI_INSECURE_OPEN=true serves open instead, every caller insecure_dev_mode"
@@ -301,6 +300,8 @@ class _ForecastPlan:
     status: np.ndarray
     errors: list[dict] = field(default_factory=list)
     demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, said in `assumptions`
+    walk: bool = False  # `origins` given: the answer carries the walk's verdict
+    threshold: float = forecast.THRESHOLD
 
 
 class Forecast:
@@ -348,6 +349,9 @@ class Forecast:
             raise _spec("width", f"`width`: {len(width)} factors for a horizon of {horizon}")
         width = np.array(width, dtype=np.float64) if isinstance(width, list) else float(width)
         levels = _levels(spec, (forecast.GRID[0], forecast.GRID[-1]))
+        threshold = spec.get("threshold", forecast.THRESHOLD)
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold <= 1:
+            raise _spec("threshold", "`threshold` is the walk's red line, a number above zero and at most 1")
 
         table, members = wire.by_member(table, "/forecast")
         status = wire.status(table)
@@ -411,7 +415,21 @@ class Forecast:
             walks.append(inputs)
         # Origin-major, so that the series forecast together are those of one origin, as a request per origin would send them.
         ordered = [walk[j] for j in range(max((len(w) for w in walks), default=0)) for walk in walks if j < len(walk)]
-        return _ForecastPlan(table, targets, horizon, levels, spans, grain, ordered, values, status, errors, list(demoted.values()))
+        return _ForecastPlan(
+            table,
+            targets,
+            horizon,
+            levels,
+            spans,
+            grain,
+            ordered,
+            values,
+            status,
+            errors,
+            list(demoted.values()),
+            walk=origins is not None,
+            threshold=float(threshold),
+        )
 
     @staticmethod
     async def serve(own: Owner, caller: str, plan: _ForecastPlan) -> tuple[pa.Table, dict]:
@@ -422,8 +440,9 @@ class Forecast:
         )
         periods = plan.table.column("period")
         h, levels = plan.horizon, np.asarray(plan.levels)
-        cols: dict[str, list] = {name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit")}
+        cols: dict[str, list] = {name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit", "withheld")}
         errors = list(plan.errors)
+        walked: dict[tuple[str, str], list[tuple[int, Any, float, str | None]]] = {}  # per member and target, its step-one points with an actual
         for one, answer in zip(plan.inputs, got):
             where = {"member": one.member, "origin": _period(periods, one.origin)}
             if isinstance(answer, Exception):
@@ -441,6 +460,20 @@ class Forecast:
                     known = plan.status[one.origin + 1 : one.origin + 1 + ahead] == "actual"
                     actual[:ahead] = np.where(known, plan.values[target][one.origin + 1 : one.origin + 1 + ahead], np.nan)
                 pits = np.array([forecast.pit(raw[step], actual[step]) if np.isfinite(actual[step]) else np.nan for step in range(h)])
+                # The withheld rule, the service's own: a PIT read against a corridor narrower than the series' grid says nothing
+                history = plan.values[target][one.start : one.origin + 1]
+                grid_step = forecast.resolution(history)
+                withheld: list[str | None] = [None] * h
+                for step in range(h):
+                    if np.isfinite(actual[step]):
+                        median = float(np.interp(0.5, forecast.GRID, np.sort(raw[step])))
+                        withheld[step] = forecast.withheld(
+                            grid_step, history[np.isfinite(history)], float(q[step].max() - q[step].min()), median, float(actual[step])
+                        )
+                        if withheld[step] is not None:
+                            pits[step] = np.nan
+                if plan.walk and np.isfinite(actual[0]):
+                    walked.setdefault((one.member, target), []).append((one.origin, _period(periods, one.origin + 1), float(pits[0]), withheld[0]))
                 n = h * len(levels)
                 cols["member"] += [one.member] * n
                 cols["origin"] += [one.origin] * n
@@ -452,6 +485,7 @@ class Forecast:
                 cols["value"] += q.reshape(-1).tolist()
                 cols["actual"] += np.repeat(actual, len(levels)).tolist()
                 cols["pit"] += np.repeat(pits, len(levels)).tolist()
+                cols["withheld"] += [why for why in withheld for _ in levels]
                 for span, total in column["totals"].items():
                     summed = float(actual[:span].sum()) if span <= ahead and np.isfinite(actual[:span]).all() else np.nan
                     m = len(levels)
@@ -465,6 +499,7 @@ class Forecast:
                     cols["value"] += np.asarray(total).reshape(-1).tolist()
                     cols["actual"] += [summed] * m
                     cols["pit"] += [np.nan] * m
+                    cols["withheld"] += [None] * m
         table = pa.table(
             {
                 "member": pa.array(cols["member"], type=pa.string()),
@@ -477,6 +512,7 @@ class Forecast:
                 "value": pa.array(np.asarray(cols["value"], dtype=np.float64), from_pandas=True),
                 "actual": pa.array(np.asarray(cols["actual"], dtype=np.float64), from_pandas=True),
                 "pit": pa.array(np.asarray(cols["pit"], dtype=np.float64), from_pandas=True),
+                "withheld": pa.array(cols["withheld"], type=pa.string()),
             }
         )
         for e in errors:
@@ -489,83 +525,39 @@ class Forecast:
         if alone:
             assumptions.append(forecast.alone(alone))
         assumptions += plan.demoted
+        if plan.walk:
+            # The walk's verdict, the service's own: per member and target the held shares over the walked points with a
+            # PIT and the newest point's displacement; one score and band over every newest point scored
+            members_out, scored = [], []
+            for (member, column), points in sorted(walked.items()):
+                points.sort(key=lambda p: p[0])
+                origin_row, period, newest_pit, why = points[-1]
+                pits_known = [p for _, _, p, w in points if w is None and np.isfinite(p)]
+                d = forecast.displacement(newest_pit) if why is None and np.isfinite(newest_pit) else None
+                if d is not None:
+                    scored.append(d)
+                members_out.append(
+                    {
+                        "member": member,
+                        "column": column,
+                        "walked": len(points),
+                        "held_80": float(np.mean([0.1 <= p <= 0.9 for p in pits_known])) if pits_known else None,
+                        "held_90": float(np.mean([0.05 <= p <= 0.95 for p in pits_known])) if pits_known else None,
+                        "newest": {
+                            "origin": _period(periods, origin_row),
+                            "period": period,
+                            "pit": newest_pit if d is not None else None,
+                            "displacement": d,
+                            "withheld": why,
+                        },
+                    }
+                )
+            score, band = forecast.verdict(scored, plan.threshold)
+            answer["walk"] = {"score": score, "band": band, "threshold": plan.threshold, "members": members_out}
+            assumptions.append(forecast.walk_basis(plan.threshold))
         if assumptions:
             answer["assumptions"] = assumptions
         return table, answer
-
-
-# -- /misfit ------------------------------------------------------------------
-
-
-@dataclass
-class _MisfitPlan:
-    x: np.ndarray
-    names: list[str]
-    categorical: list[int]
-    cells: bool
-    folds: int
-
-
-class Misfit:
-    """Anomaly detection over one frame: the chain-rule density per
-    cell (`kernels.misfit`), and what is served is how far each cell
-    lies below what is typical for its column (`kernels.strangeness`):
-    `score` per row is its lowest cell, and with `cells` every cell
-    beside it. With `folds`, each row is scored from a context it is
-    not in.
-
-    The frame is every column of the table: a frame has no member,
-    period or status of its own, and a column so named is a column
-    like any other. A column of text or booleans is a category;
-    `categorical` names, by column, further columns to take as
-    categories whatever their values (an account number, a code). A
-    null is a missing value, as is empty text in a column of text."""
-
-    @staticmethod
-    def parse(table: pa.Table, spec: dict[str, Any]) -> _MisfitPlan:
-        cells = spec.get("cells", False)
-        if not isinstance(cells, bool):
-            raise _spec("cells", "`cells` is true or false")
-        folds = spec.get("folds", 1)
-        if not isinstance(folds, int) or isinstance(folds, bool) or not 1 <= folds <= 10:
-            raise _spec("folds", "`folds` is a whole number from 1 to 10")
-        names = list(table.column_names)
-        if len(names) < 2 or table.num_rows < 2:
-            raise Refusal(f"the frame is {table.num_rows} rows by {len(names)} columns: a read needs two of each")
-        named = spec.get("categorical", [])
-        if not isinstance(named, list) or any(not isinstance(c, str) for c in named):
-            raise _spec("categorical", "`categorical` is a list of column names")
-        for c in named:
-            if c not in names:
-                raise _spec("categorical", f"`categorical`: the frame has no column `{c}`")
-        categorical = {names.index(c) for c in named} | {j for j, c in enumerate(names) if wire.is_category(table.schema.field(c))}
-        x = np.full((table.num_rows, len(names)), np.nan)
-        for j, name in enumerate(names):
-            if j in categorical:
-                words = (
-                    wire.categories(table, name)
-                    if wire.is_category(table.schema.field(name))
-                    else np.array(["" if v is None else str(v) for v in wire.clean(table.column(name).to_pylist())], dtype=object)
-                )
-                codes = {key: i for i, key in enumerate(sorted({w for w in words if w != ""}))}
-                x[:, j] = [np.nan if w == "" else codes[w] for w in words]
-            else:
-                x[:, j] = wire.numeric(table, name)
-        return _MisfitPlan(x, names, sorted(categorical), cells, folds)
-
-    @staticmethod
-    async def serve(own: Owner, caller: str, plan: _MisfitPlan) -> tuple[pa.Table, dict]:
-        x = plan.x
-        # The chain rule fits a conditional per column per ordering: the frame, that many times — per fold.
-        work = 2 * x.shape[1] * x.size * plan.folds
-        waiting = own.exclusive(caller, "misfit", work, lambda k: k.misfit(x, columns=True, folds=plan.folds, categorical=plan.categorical))
-        _logs, shares = await asyncio.wrap_future(waiting)
-        scores, cells = kernels.strangeness(np.asarray(shares, dtype=np.float64))
-        columns = {"row": pa.array(np.arange(x.shape[0]), type=pa.int64()), "score": pa.array(scores, from_pandas=True)}
-        if plan.cells:
-            for j, name in enumerate(plan.names):
-                columns[name] = pa.array(cells[:, j], from_pandas=True)
-        return pa.table(columns), {"errors": [], "assumptions": [kernels.floor_assumption()]}
 
 
 # -- /whatif ------------------------------------------------------------------
@@ -799,7 +791,6 @@ app = telemetry.asgi(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
             Route("/forecast", _door(Forecast), methods=["POST"]),
-            Route("/misfit", _door(Misfit), methods=["POST"]),
             Route("/whatif", _door(Whatif), methods=["POST"]),
         ]
     )

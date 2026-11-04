@@ -44,7 +44,7 @@ def test_callers_are_taken_in_turn_and_hear_their_own_answers():
     kernel = Gated()
     own = held(kernel)
     flood = [own.exclusive("a", "forecast", 10, job(10.0 + i)) for i in range(3)]
-    late = own.exclusive("b", "misfit", 10, job(99.0))
+    late = own.exclusive("b", "whatif", 10, job(99.0))
     kernel.gate.set()
     assert [f.result(5) for f in flood] == [10.0, 11.0, 12.0] and late.result(5) == 99.0
     # The late caller is served after the flood's first job, not behind the flood.

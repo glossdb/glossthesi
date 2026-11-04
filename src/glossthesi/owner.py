@@ -4,7 +4,7 @@ Handlers do not touch the model: they hand the owner a job and await
 it. The owner is one thread. It takes the waiting jobs one at a time,
 callers in turn, so one caller's burst does not hold the device from
 the rest, and an idle service answers at once. A job has the device to
-itself: a forecast of a request's series, the misfit read of a frame.
+itself: a forecast of a request's series, the what-if of a member's history.
 
 The queue pushes back before memory does. Waiting jobs are arrays in
 host memory, so the bound is on what they hold — cells, not requests —
@@ -48,7 +48,7 @@ class TooLarge(Exception):
 @dataclass
 class _Job:
     caller: str
-    kind: str  # the job's name: "forecast", "misfit"
+    kind: str  # the job's name: "forecast", "whatif"
     cells: int
     future: Future
     run: Callable[[Any], Any]  # the kernel in, the answer out

@@ -197,6 +197,70 @@ def pit(grid: np.ndarray, actual: float) -> float:
     return float(levels[lo] + (levels[hi] - levels[lo]) * (actual - g[lo]) / (g[hi] - g[lo]))
 
 
+THRESHOLD = 0.98  # the walk's red line, unless the specification names one
+EDGES = (0.8, 0.9)  # displacement at the 10-90 band's edge and at the 5-95 band's: green to the first, yellow to the second
+
+
+def resolution(history: np.ndarray) -> float | None:
+    """The series' resolution, where it has one: a series that repeats
+    a value moves on a grid, and the smallest gap between two of its
+    values is the grid's step — 0.0 when it takes one value only. A
+    series that never repeats is continuous as far as its history
+    shows, and a tight corridor on it is earned, not noise: None."""
+    known = np.asarray(history, dtype=np.float64)
+    known = known[np.isfinite(known)]
+    distinct = np.unique(known)
+    if distinct.size == known.size:
+        return None
+    return float(np.diff(distinct).min()) if distinct.size > 1 else 0.0
+
+
+def withheld(step: float | None, history: np.ndarray, corridor: float, median: float, actual: float) -> str | None:
+    """Why a walked point's PIT says nothing, or None. A corridor
+    narrower than the grid's step, with the actual inside a step of the
+    median, is the model's noise around a value the series takes
+    exactly; an actual further off than a step is a real move whatever
+    the corridor. A constant history whose actual equals it is the
+    same case at a step of zero."""
+    if step is None:
+        return None
+    if step > 0.0 and corridor < step and abs(actual - median) <= step:
+        return f"corridor {corridor:.3e} is narrower than the series' resolution {step:.3e} and the actual sits within it"
+    if step == 0.0 and history.size and history[0] == actual:
+        return "the training series is constant and the actual equals it"
+    return None
+
+
+def displacement(pit_value: float) -> float:
+    """How far a PIT sits from the median: 0 at the median, 0.8 at a
+    10-90 band's edge, 0.9 at a 5-95 band's, 1 outside the grid."""
+    return abs(2.0 * pit_value - 1.0)
+
+
+def verdict(displacements: list[float], threshold: float) -> tuple[float, str]:
+    """The walk's score and band over the newest point of every member
+    scored: the worst displacement raised to their number, since the
+    worst of k calibrated displacements lands under an edge e with
+    probability e to the k, so the edges keep their base rate at any
+    count. Nothing scored is 0.0, green."""
+    if not displacements:
+        return 0.0, "green"
+    score = float(max(displacements) ** len(displacements))
+    band = "green" if score <= EDGES[0] else "yellow" if score <= EDGES[1] else "orange" if score <= threshold else "red"
+    return score, band
+
+
+def walk_basis(threshold: float) -> dict:
+    return {
+        "field": "walk",
+        "threshold": threshold,
+        "basis": f"assumed: the verdict reads the newest walked point of every member with a PIT, displacement |2·pit - 1| "
+        f"(0 at the median, {EDGES[0]} at the 10-90 band's edge, {EDGES[1]} at the 5-95 band's), the worst of k raised to k "
+        f"so the edges keep their base rate at any count; green to {EDGES[0]}, yellow to {EDGES[1]}, orange to the threshold "
+        f"{threshold}, red past it; a point whose PIT is withheld is not scored",
+    }
+
+
 def learned_width(lower, median, upper, actual, nominal: float = 0.80, prior: int = 30) -> float:
     """The width a dataset's intervals should be sent with, from the
     dataset's record: per point of a past forecast, the interval's

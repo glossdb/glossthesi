@@ -1,15 +1,13 @@
 # glossthesi
 
-The model service behind glossql: forecasts of time series with
-prediction intervals and the walk that grades them, anomaly detection
-in tables, and which way a column moves under a changed input. The
-server carries no model; it names this service per point and calls
-it over HTTP.
+The model service behind glossdb: forecasts of time series with
+prediction intervals and the walk that grades them, and which way a
+column moves under a changed input. The server carries no model; it
+names this service once and calls it over HTTP.
 
 | Task | Route | Model |
 |---|---|---|
-| Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
-| Anomaly detection in a table: errors that break a relation between columns | `/misfit` | TabICL (`tabicl` at a pinned version): the regressor for numeric columns, the classifier for categorical ones |
+| Forecasts of time series with prediction intervals; the walk, from past origins, with the PIT per point and its verdict | `/forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
 | What-if: which way a column has moved with one or several changed inputs in the member's own history, where the model agrees, with the reason, the model's and the history's estimate, and the error on a held-back period (`docs/whatif.md`) | `/whatif` | TabICL's forecaster, as its package ships it, and the series' own history |
 
 There is one forecasting set-up. It was chosen on forecasts a quarter
@@ -30,13 +28,12 @@ GLOSSTHESI_INSECURE_OPEN=true uv run glossthesi   # no check at all: a laptop tr
 | `GLOSSTHESI_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
 | `GLOSSTHESI_AUDIENCE`, `GLOSSTHESI_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
 | `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host); a caller is recorded as the key's place in the list (`key-1`), never as the key. With neither set the service does not start, and every door refuses |
-| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossql's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
+| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossdb's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
 | `GLOSSTHESI_VERSION` | the build's name, on every answer, on `/healthz` and every log line; the image bakes the commit |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | a collector to send traces, metrics and logs to (OTLP/HTTP); unset, the JSON log lines on stdout are all; the `otel` extra |
 | `GLOSSTHESI_QUEUE_MB` | what may wait for the device, in MB of tables; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |
 | `GLOSSTHESI_MAX_BODY_MB` | the largest body parsed; default 32 — past it a `413`, as the bytes arrive and as an Arrow stream decodes, batch by batch (a compressed stream may be many times its wire size) |
 | `GLOSSTHESI_PRELOAD` | `0` leaves Chronos-2 to its first forecast; default all models load before the port opens |
-| `GLOSSTHESI_MISFIT_WORKERS` | threads fitting the misfit read's conditionals side by side; default four on CUDA, one elsewhere |
 | `HF_HUB_OFFLINE` | `1` in the image: the checkpoints are baked, nothing is fetched at start |
 
 The checkpoints come from the Hugging Face hub cache (`jingang/TabICL`,
@@ -61,8 +58,7 @@ the fields to repair where the specification is at fault.
 
 | route | specification | answer table |
 |---|---|---|
-| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed; the answer object's `coverage` says how often each band held on held-out data at that grain and step |
-| `POST /misfit` | `categorical`, `cells`, `folds` | a row per frame row: `score`, and with `cells` a column per frame column |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for the walk or a backtest, `threshold` its red line | a row per member, origin, step, column and level: `value`, and `actual` and `pit` where the actual has landed, or `withheld` why the PIT says nothing; the answer object's `coverage` says how often each band held on held-out data at that grain and step, and with `origins` its `walk` carries the verdict: per member the held shares and the newest point, one score and band over all |
 | `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `checkpoints`, `owner` |
 
 A forecast, in the JSON encoding:
@@ -87,11 +83,11 @@ table holds nine rows for the periods (three steps by three levels)
 and three for the total, each with the member, the origin
 (`2026-06`), the step, the period, the column and the level.
 
-The walk as glossql declares it: one member per metric, one value
+The walk as glossdb declares it: one member per metric, one value
 column, `origins` 6 and `horizon` 1. The answer holds per metric and
 walked period the bands, the actual and the PIT, read against the
 model's own quantile grid before any `width`. The record of PITs
-stays on glossql's side (`docs/forecast.md`, GK-35).
+stays on glossdb's side (`docs/forecast.md`, GK-35).
 
 Points that shape a client:
 
@@ -111,11 +107,6 @@ Points that shape a client:
   width from a dataset's record of forecasts and actual values is
   `glossthesi.forecast.learned_width`; on records of one to two
   years it does not pay (GK-35).
-- **`/misfit` reads the frame the caller joins.** A relation is
-  visible only when its columns are in one frame: payments joined to
-  their invoices, order lines to products and plants. Codes go as
-  `categorical`. General anomaly detection is another field and is
-  not offered (GK-23).
 
 ## Hosting
 
@@ -136,7 +127,7 @@ Production is GCP, on an L4 behind Cloud Run; the deployment — the
 project, the region, the collector sidecar, who may call — lives in the
 private deployment repo, not here. What it relies on: the service
 scaled to zero and billed by instance time, the cold start waited out
-by the caller (glossql's call timeout is 600 s); CUDA from torch's
+by the caller (glossdb's call timeout is 600 s); CUDA from torch's
 wheels and the driver from the host, so a torch move is checked
 against the host's driver; one instance until 429s say otherwise;
 authentication by identity at the Cloud Run edge and again in the
@@ -175,13 +166,13 @@ The bench, on any host with a GPU that runs the container:
 
 ```bash
 python -m glossthesi.measure                      # the reads' timings, this device
-python -m glossthesi.measure --parity fixtures/   # the density oracle here; --amp grades reduced precision
+python -m glossthesi.measure --amp                # the same at reduced precision
 ```
 
 ## Evaluation
 
 What each route promises, how it works, what was tested and what was
-found is on a page per route: `docs/forecast.md`, `docs/misfit.md`,
+found is on a page per route: `docs/forecast.md` and
 `docs/whatif.md`.
 
 The evaluation itself is kept in a repository of its own, which is
@@ -201,7 +192,7 @@ Copyright © 2026 Philipp Suter. GNU Affero General Public License,
 version 3 or any later version (`LICENSE`). The service may be used,
 changed and run freely; whoever changes it and runs it for others
 over a network has to offer them the changed source (the licence's
-section 13). glossql is a separate program that talks to the service
+section 13). glossdb is a separate program that talks to the service
 over HTTP. The checkpoints the image bakes carry licences of their
 own: Chronos-2 under Apache-2.0, TabICL under BSD-3-Clause with its
 forecasting part under Apache-2.0.

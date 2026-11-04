@@ -2,7 +2,7 @@
 caller reads before handing out a range, served on every `/forecast`
 answer as `coverage` (`docs/contract.md`).
 
-Per grain, at every step glossql asks (12 months, 13 weeks, 31 days,
+Per grain, at every step glossdb asks (12 months, 13 weeks, 31 days,
 4 quarters) and at every span up to that horizon: the share of actual
 values inside the 80% interval (levels 0.10 to 0.90) and inside the
 90% interval (0.05 to 0.95), the points behind the share and its
