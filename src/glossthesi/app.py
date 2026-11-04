@@ -1,9 +1,8 @@
 """The doors of the service: one table and a specification in, one
 table and an answer out (`docs/contract.md`, `wire.py`).
 
-Three reads on the one table — `/forecast` for the periods ahead and
-the walk, `/misfit` for the rows that break a relation between
-columns, `/whatif` for which way a column moves under a changed
+Two reads on the one table — `/forecast` for the periods ahead and
+the walk, `/whatif` for which way a column moves under a changed
 input — and `/healthz`. Nothing here knows about datasets, metrics
 or actors: a request is numbers and a key.
 
@@ -561,80 +560,6 @@ class Forecast:
         return table, answer
 
 
-# -- /misfit ------------------------------------------------------------------
-
-
-@dataclass
-class _MisfitPlan:
-    x: np.ndarray
-    names: list[str]
-    categorical: list[int]
-    cells: bool
-    folds: int
-
-
-class Misfit:
-    """Anomaly detection over one frame: the chain-rule density per
-    cell (`kernels.misfit`), and what is served is how far each cell
-    lies below what is typical for its column (`kernels.strangeness`):
-    `score` per row is its lowest cell, and with `cells` every cell
-    beside it. With `folds`, each row is scored from a context it is
-    not in.
-
-    The frame is every column of the table: a frame has no member,
-    period or status of its own, and a column so named is a column
-    like any other. A column of text or booleans is a category;
-    `categorical` names, by column, further columns to take as
-    categories whatever their values (an account number, a code). A
-    null is a missing value, as is empty text in a column of text."""
-
-    @staticmethod
-    def parse(table: pa.Table, spec: dict[str, Any]) -> _MisfitPlan:
-        cells = spec.get("cells", False)
-        if not isinstance(cells, bool):
-            raise _spec("cells", "`cells` is true or false")
-        folds = spec.get("folds", 1)
-        if not isinstance(folds, int) or isinstance(folds, bool) or not 1 <= folds <= 10:
-            raise _spec("folds", "`folds` is a whole number from 1 to 10")
-        names = list(table.column_names)
-        if len(names) < 2 or table.num_rows < 2:
-            raise Refusal(f"the frame is {table.num_rows} rows by {len(names)} columns: a read needs two of each")
-        named = spec.get("categorical", [])
-        if not isinstance(named, list) or any(not isinstance(c, str) for c in named):
-            raise _spec("categorical", "`categorical` is a list of column names")
-        for c in named:
-            if c not in names:
-                raise _spec("categorical", f"`categorical`: the frame has no column `{c}`")
-        categorical = {names.index(c) for c in named} | {j for j, c in enumerate(names) if wire.is_category(table.schema.field(c))}
-        x = np.full((table.num_rows, len(names)), np.nan)
-        for j, name in enumerate(names):
-            if j in categorical:
-                words = (
-                    wire.categories(table, name)
-                    if wire.is_category(table.schema.field(name))
-                    else np.array(["" if v is None else str(v) for v in wire.clean(table.column(name).to_pylist())], dtype=object)
-                )
-                codes = {key: i for i, key in enumerate(sorted({w for w in words if w != ""}))}
-                x[:, j] = [np.nan if w == "" else codes[w] for w in words]
-            else:
-                x[:, j] = wire.numeric(table, name)
-        return _MisfitPlan(x, names, sorted(categorical), cells, folds)
-
-    @staticmethod
-    async def serve(own: Owner, caller: str, plan: _MisfitPlan) -> tuple[pa.Table, dict]:
-        x = plan.x
-        # The chain rule fits a conditional per column per ordering: the frame, that many times — per fold.
-        work = 2 * x.shape[1] * x.size * plan.folds
-        waiting = own.exclusive(caller, "misfit", work, lambda k: k.misfit(x, columns=True, folds=plan.folds, categorical=plan.categorical))
-        _logs, shares = await asyncio.wrap_future(waiting)
-        scores, cells = kernels.strangeness(np.asarray(shares, dtype=np.float64))
-        columns = {"row": pa.array(np.arange(x.shape[0]), type=pa.int64()), "score": pa.array(scores, from_pandas=True)}
-        if plan.cells:
-            for j, name in enumerate(plan.names):
-                columns[name] = pa.array(cells[:, j], from_pandas=True)
-        return pa.table(columns), {"errors": [], "assumptions": [kernels.floor_assumption()]}
-
-
 # -- /whatif ------------------------------------------------------------------
 
 
@@ -866,7 +791,6 @@ app = telemetry.asgi(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
             Route("/forecast", _door(Forecast), methods=["POST"]),
-            Route("/misfit", _door(Misfit), methods=["POST"]),
             Route("/whatif", _door(Whatif), methods=["POST"]),
         ]
     )

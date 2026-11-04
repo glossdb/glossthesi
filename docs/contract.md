@@ -33,10 +33,10 @@ The body is at most 32 MB (`GLOSSTHESI_MAX_BODY_MB`).
 
 | Column | Type | Meaning |
 |---|---|---|
-| `member` | string | The series, or the member of the dimension the rows are by: a metric's name, a segment, a store. Required by `/forecast`; a frame column for `/misfit`. |
-| `period` | string, date, timestamp or integer | The period of the row. The service orders a member's rows by it and never parses it: the calendar is the caller's, and `grain` in the specification says what a period is. A string period has to sort in time order as text (`2026-07`, `2026-W27`), or it is sent as a date. A member with two rows of one period is refused. Required by `/forecast`; a frame column for `/misfit`. |
-| `status` | string | `actual`, `plan`, `forecast` or `scenario`. Absent, every row is `actual`. What a row's status means is in each route below; a frame column for `/misfit`. |
-| every other column | numeric, or string or boolean for a category | A value per row. Numbers are read as float64, a null as missing. A string or boolean column is a category: a covariate for `/forecast`, a categorical column for `/misfit`. |
+| `member` | string | The series, or the member of the dimension the rows are by: a metric's name, a segment, a store. Required by `/forecast`. |
+| `period` | string, date, timestamp or integer | The period of the row. The service orders a member's rows by it and never parses it: the calendar is the caller's, and `grain` in the specification says what a period is. A string period has to sort in time order as text (`2026-07`, `2026-W27`), or it is sent as a date. A member with two rows of one period is refused. Required by `/forecast`. |
+| `status` | string | `actual`, `plan`, `forecast` or `scenario`. Absent, every row is `actual`. What a row's status means is in each route below. |
+| every other column | numeric, or string or boolean for a category | A value per row. Numbers are read as float64, a null as missing. A string or boolean column is a category: a covariate for `/forecast`. |
 
 Nothing in the table names a dataset, a metric's meaning or an
 actor. The caller keeps the names and reads them back from the
@@ -151,41 +151,6 @@ and the verdict. The record of walks stays on glossql's side; the
 service reads no record. A dataset whose record says the bands run
 narrow sends a `width` (GK-35: on records of one to two years it does
 not pay yet).
-
-## `/misfit`: errors that break a relation between columns
-
-TabICL, the chain-rule density per cell (`docs/misfit.md`, GK-37,
-GK-38). The frame is every column of the table: a frame has no
-member, period or status of its own, and a column so named (an
-invoice's status) is a column like any other. The columns are read
-in the order sent, each against the ones before it and, reversed,
-the ones after, so the order is part of the read: send the columns a
-value is computed from before it (GK-67).
-
-**The specification.**
-
-| Field | Meaning | Absent |
-|---|---|---|
-| `categorical` | Columns to take as categories whatever their values: account numbers, codes. A string or boolean column is a category anyway. | none |
-| `cells` | Whether to answer per cell as well as per row. | false |
-| `folds` | 2 to 10: every row is scored from a context it is not in, at that many times the fits. A category seen in the scored fold only gets a probability of one in n + 1 of the rows the conditional was fit on (GK-69). | 1 |
-
-**The answer table.** One row per frame row, in the frame's order.
-The scores move a little with the order of the rows: the same table
-sent with its rows in another order ranks them nearly, not exactly,
-the same — the model's own, not a bug to report (GK-73).
-
-| Column | Meaning |
-|---|---|
-| `row` | The row's position in the frame, from 0. |
-| `score` | How far the row's strangest cell lies below what is typical for that cell's column, in units of the column's spread or in nats where the spread is under a nat. Lower is stranger; around zero and above is ordinary. The floor of one nat on a column's spread is a constant, declared in the answer's `assumptions` (`docs/misfit.md`, GK-38). |
-| one column per frame column, with `cells` | The same per cell. The row's lowest cell names the column to look at: right, or one the error touches, in 0.97 of the injected errors on our tests (GK-21). |
-
-A frame needs two rows and two columns. No threshold is served: the
-caller ranks. The scope is errors that break a relation between the
-columns of one table; the caller's join decides what is checked.
-General anomaly detection is another field (GK-23) and is not
-offered.
 
 ## `/whatif`: which way a column moves under a changed input
 
@@ -381,9 +346,8 @@ As before: `Authorization: Bearer …`, a Google-signed ID token for
 `GLOSSTHESI_AUDIENCE` from one of `GLOSSTHESI_CALLERS`, or one of
 `GLOSSTHESI_KEYS`. With neither set every door refuses and the
 service does not start; `GLOSSTHESI_INSECURE_OPEN=true` is the one
-way around, for a laptop. glossql names a URL per
-point (the walk, the misfit); every one names this
-service. Nothing on the wire names a point.
+way around, for a laptop. glossql names this
+service once. Nothing on the wire names a point.
 
 ## What went
 
@@ -423,13 +387,6 @@ May go: the feature recipe and the point-in-time fills in
 on the runtime trait, `pit_history` on the wire, `band_grid`, and in
 `crates/scripts/src/remote.rs` the JSON matrices: one client sends a
 table and a specification and reads a table and an answer.
-
-**The misfit (`misfit.<frame>()`).** Send the frame's rows as the
-table, every column as it is (a frame has no reserved names), text
-for categories, codes named in `categorical`; `{"cells": true}` to have the column named. Receive
-`row`, `score` and a column per frame column. The caps (2,000 rows,
-16 columns) stay the door's own; the service refuses only a frame
-under two rows or two columns.
 
 **The what-if (`whatif.<scenario>()`).** Send
 the table at the grain at which the overridden column varies from

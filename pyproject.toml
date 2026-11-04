@@ -6,10 +6,10 @@ requires-python = ">=3.13,<3.14"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 dependencies = [
-    # Pinned: the oracle fixtures in the port repo were generated with
-    # 2.1.1 and 2.2.0 reproduces them (same checkpoints); a move re-runs
-    # the parity tests. The `forecast` extra (pandas, statsmodels,
-    # matplotlib) is what the package's forecaster imports: the what-if.
+    # Pinned: the what-if's record (docs/whatif.md) was made with the
+    # package's forecaster at this version; a move re-runs the suite.
+    # The `forecast` extra (pandas, statsmodels, matplotlib) is what
+    # the package's forecaster imports: the what-if.
     "tabicl[forecast]==2.2.0",
     "torch>=2.13",
     "numpy>=2",

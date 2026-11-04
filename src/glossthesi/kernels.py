@@ -1,19 +1,12 @@
 """The models, loaded once: TabICL's regressor and classifier on one
-device for the misfit read and the what-if, and Chronos-2 for the
-forecasts (`forecast.py`).
-
-- `misfit`: the chain-rule density over one frame, fit and scored on
-  the same rows, log space, mean over permutations — higher fits the
-  frame better. A numeric column's conditional is the regressor's
-  density, a categorical column's the classifier's probability of the
-  category seen.
+device for the what-if, and Chronos-2 for the forecasts
+(`forecast.py`).
 
 - `series`: TabICL's forecaster as its package ships it, for the
   what-if (`whatif.py`): a series' history and the periods to predict
   with their inputs in, quantiles per period out.
 
-The checkpoints load once and are shared with the density read the
-way `TabICLUnsupervised` shares its own, and with the forecaster.
+The checkpoints load once and are shared with the forecaster.
 """
 
 from __future__ import annotations
@@ -21,12 +14,11 @@ from __future__ import annotations
 import os
 import threading
 import warnings
-from typing import Any
 
 import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
-from tabicl import TabICLClassifier, TabICLRegressor, TabICLUnsupervised
+from tabicl import TabICLClassifier, TabICLRegressor
 
 from . import forecast
 
@@ -91,17 +83,6 @@ def _probe_memory_cheaply() -> None:
 
 if os.environ.get("GLOSSTHESI_FLUSHING_PROBE", "") != "1":  # the package's own, for a comparison
     _probe_memory_cheaply()
-
-
-class _Unsupervised(TabICLUnsupervised):
-    """The density read over the shared regressor and classifier."""
-
-    def __init__(self, regressor: torch.nn.Module, classifier: torch.nn.Module, **kwargs: Any):
-        super().__init__(**kwargs)
-        self._regressor, self._classifier = regressor, classifier
-
-    def _load_shared_model(self, estimator_cls):
-        return self._classifier if estimator_cls is TabICLClassifier else self._regressor
 
 
 class Kernels:
@@ -214,205 +195,6 @@ class Kernels:
             torch.cuda.empty_cache()
         elif self.device == "mps":
             torch.mps.empty_cache()
-
-    def misfit(
-        self,
-        x: np.ndarray,
-        *,
-        perms: list[np.ndarray] | None = None,
-        random_state: int = 0,
-        train: np.ndarray | None = None,
-        workers: int | None = None,
-        columns: bool = False,
-        folds: int = 1,
-        categorical: list[int] | None = None,
-    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Mean log density per row over the orderings in `perms`, fit on
-        `train` (default: the frame itself). Log space end to end — the
-        package's `score_samples` exponentiates the same mean.
-
-        The columns in `categorical` hold category codes (whole numbers
-        from 0, NaN where missing); their conditional is the classifier's
-        probability of the code seen, the other columns' the regressor's
-        density. A categorical column with one category in the context
-        says nothing and is skipped, as a column with too few values is.
-
-        With `columns`, also (rows, cols): each column's share of that
-        score — its conditional log density, averaged over the orderings
-        as the score is — so a row's shares sum to its score and the
-        lowest one names the cell that made the row improbable. A column
-        with too few values to fit is NaN, and adds nothing to the score.
-
-        With `folds` over 1 no row is in the context that scores it: the
-        frame is split, and each part is scored from the rest. A frame
-        that scores itself lets every row find itself in the context, which
-        hides a value that is ordinary for its column and wrong for its
-        row (planted sign flips: their cells ranked 9-344 of 1200 lowest
-        self-fit, 4-77 over two folds); a value far outside its column is
-        named either way. The cost is that many times the fits.
-
-        The orderings default to the port's protocol: identity and
-        reverse, so every column conditions both early and late and the
-        read costs two conditionals per column. What a column is read
-        against depends on its place among the columns, so the caller's
-        column order is part of the read and the contract says so
-        (GK-67); order-free reads were judged and not taken (GK-68). A
-        category the context never held gets the package's floor of
-        `UNSEEN`, lifted to one in n + 1 of the conditional's training
-        rows, the rule of succession: with `folds`, a category seen in
-        the scored fold only is strange, not minus 23 nats strange
-        (GK-69). Not the package's own
-        `score_samples`, whose latin shuffler ignores the count it is
-        asked for and returns one ordering per column — sixteen on a
-        sixteen-column frame, eight times the work.
-
-        The chain rule is one conditional per column per ordering, each
-        independent given the frame: the same fits the package runs one
-        after another (`_compute_log_density`), dispatched here over
-        `workers` threads so the accelerator is not idle while the next
-        conditional is prepared. Every conditional is computed exactly as
-        in the sequential loop, and the sums are taken in the loop's
-        order, so the numbers do not depend on the schedule. The one
-        stateful thing in that loop is the dummy column for the first
-        conditional of each ordering, drawn from one random stream in
-        loop order; it is drawn here in that order before dispatch.
-        """
-        rows, cols = x.shape
-        if rows < 2 or cols < 2:
-            raise KernelError(f"misfit: {rows} rows x {cols} features — the read needs two of each")
-        if folds > 1:
-            if train is not None or rows < 2 * folds:
-                raise KernelError(f"misfit: {folds} folds split one frame, of at least {2 * folds} rows")
-            order = np.random.default_rng(random_state).permutation(rows)
-            scores, shares = np.empty(rows), np.empty((rows, cols))
-            for f in range(folds):
-                out = np.sort(order[f::folds])
-                rest = np.setdiff1d(order, out)
-                scores[out], shares[out] = self.misfit(
-                    x[out], perms=perms, random_state=random_state, train=x[rest], workers=workers, columns=True, categorical=categorical
-                )
-            return (scores, shares) if columns else scores
-        u = _Unsupervised(
-            self.model,
-            self.classifier,
-            n_estimators=1,
-            categorical_features=sorted(set(categorical or [])),
-            random_state=random_state,
-            device=self.device,
-            estimator_params={
-                "norm_methods": "none",
-                "feat_shuffle_method": "none",
-                "use_amp": self.use_amp,
-            },
-        )
-        try:
-            u.fit(x if train is None else train)
-        except Exception as e:
-            raise KernelError(f"misfit: {e}") from e
-        xf = x.astype(np.float32)
-        rng = np.random.default_rng(random_state)
-        if perms is None:
-            perms = [np.arange(cols), np.arange(cols)[::-1]]
-        perms = [np.asarray(p, dtype=np.int64) for p in perms]
-        n_permutations = len(perms)
-
-        # (ordering, column, conditioning columns, train mask, noise) —
-        # in the package's loop order, the noise drawn where it draws it.
-        tasks = []
-        for pi, perm in enumerate(perms):
-            for i, col in enumerate(perm):
-                col = int(col)
-                train_mask = ~np.isnan(u.X_[:, col])
-                if train_mask.sum() < u._MIN_SAMPLES_PER_CONDITIONAL:
-                    continue
-                if col in u.categorical_features_ and u.categories_[col].size < 2:
-                    continue
-                cond = [int(c) for c in perm[:i]]
-                noise = None
-                if not cond:
-                    noise = (
-                        rng.standard_normal((int(train_mask.sum()), 1)).astype(np.float32),
-                        rng.standard_normal((rows, 1)).astype(np.float32),
-                    )
-                tasks.append((pi, col, cond, train_mask, noise))
-
-        def conditional(task):
-            pi, col, cond, train_mask, noise = task
-            if noise is None:
-                x_train, x_test = u.X_[train_mask][:, cond], xf[:, cond]
-            else:
-                x_train, x_test = noise
-            y_train = u.X_[train_mask, col]
-            est, is_categorical = u._fit_conditional_estimator(col, x_train, y_train)
-            if not is_categorical:
-                return pi, col, u._log_prob_numerical(est, x_test, xf[:, col])
-            lp = u._log_prob_categorical(est, x_test, xf[:, col])
-            # The package's floor for a category the context never held, lifted to one in n + 1 of the training rows.
-            return pi, col, np.where(lp <= np.log(UNSEEN) + 1e-6, np.log(1.0 / (int(train_mask.sum()) + 1)), lp)
-
-        workers = workers or misfit_workers(self.device)
-        try:
-            if workers <= 1:
-                results = [conditional(t) for t in tasks]
-            else:
-                from concurrent.futures import ThreadPoolExecutor
-
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    results = list(pool.map(conditional, tasks))
-        except Exception as e:
-            raise KernelError(f"misfit: {e}") from e
-        sums = np.zeros((n_permutations, rows))
-        shares = np.full((n_permutations, rows, cols), np.nan)
-        for pi, col, lp in results:  # task order — the loop's summation order
-            sums[pi] += lp
-            shares[pi, :, col] = lp
-        scores = np.mean(sums, axis=0)
-        return (scores, np.mean(shares, axis=0)) if columns else scores
-
-
-SPREAD_FLOOR = 1.0  # nats: a column's spread is never taken finer than this
-UNSEEN = 1e-10  # the package's probability for a category the context never held; lifted to 1/(n + 1) in `misfit` (GK-69)
-
-
-def floor_assumption() -> dict:
-    """What the served score rests on, for the answer object: the floor
-    on a column's spread and where it comes from."""
-    return {
-        "field": "score",
-        "floor_nats": SPREAD_FLOOR,
-        "basis": "a constant: a cell is read in its column's spread, never finer than one nat; chosen among 0.5, 1 and 2 on development tables, 1 and 2 reading alike and 0.5 worse (GK-38)",
-    }
-
-
-def strangeness(shares: np.ndarray, floor: float = SPREAD_FLOOR) -> tuple[np.ndarray, np.ndarray]:
-    """From the per-cell log densities of a frame (rows, cols), what is
-    served: per cell how far it lies below what is typical for its
-    column — the share minus the column's median, in units of the
-    column's spread (1.4826 times the median absolute deviation) where
-    that exceeds `floor`, else in nats — and per row the lowest of its
-    cells. A density's level depends on the column's scale and a
-    probability's does not, so the shares of different columns are
-    not compared as they come; centered they are, and a column whose
-    shares swing by more than a nat between ordinary rows is read in
-    units of that swing. Lower is stranger; around zero and above is
-    ordinary. A cell without a share is NaN and never the row's
-    lowest; a row without any share is NaN."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # a column without a share has no median
-        median = np.nanmedian(shares, axis=0)
-        spread = 1.4826 * np.nanmedian(np.abs(shares - median), axis=0)
-        cells = (shares - median) / np.maximum(np.nan_to_num(spread, nan=0.0), floor)
-        scores = np.nanmin(cells, axis=1)
-    return scores, cells
-
-
-def misfit_workers(device: str) -> int:
-    """`GLOSSTHESI_MISFIT_WORKERS`, else four on CUDA and one elsewhere
-    (Metal runs one queue, and the CPU is the bottleneck on the CPU)."""
-    named = os.environ.get("GLOSSTHESI_MISFIT_WORKERS", "").strip()
-    if named.isdigit() and int(named) > 0:
-        return int(named)
-    return 4 if device == "cuda" else 1
 
 
 # -- the process's one instance ---------------------------------------------
