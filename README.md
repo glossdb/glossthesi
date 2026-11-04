@@ -1,6 +1,6 @@
 # glossthesi
 
-The model service behind glossql: forecasts of time series with
+The model service behind glossdb: forecasts of time series with
 prediction intervals and the walk that grades them, and which way a
 column moves under a changed input. The server carries no model; it
 names this service once and calls it over HTTP.
@@ -28,7 +28,7 @@ GLOSSTHESI_INSECURE_OPEN=true uv run glossthesi   # no check at all: a laptop tr
 | `GLOSSTHESI_DEVICE` | `cuda`, `mps` or `cpu`; default the first available in that order |
 | `GLOSSTHESI_AUDIENCE`, `GLOSSTHESI_CALLERS` | the doors take Google-signed ID tokens for that audience (the service's URL) from the listed service accounts — what a caller on GCP mints from its metadata server, no key anywhere; the `auth` extra |
 | `GLOSSTHESI_KEYS` | comma-separated bearer keys instead (a laptop, a test host); a caller is recorded as the key's place in the list (`key-1`), never as the key. With neither set the service does not start, and every door refuses |
-| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossql's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
+| `GLOSSTHESI_INSECURE_OPEN` | `true` (the literal) serves every door without authentication, every caller recorded as `insecure_dev_mode`, as glossdb's switch of the same name does. The name is the warning: a laptop trying the service out, never a deployment |
 | `GLOSSTHESI_VERSION` | the build's name, on every answer, on `/healthz` and every log line; the image bakes the commit |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | a collector to send traces, metrics and logs to (OTLP/HTTP); unset, the JSON log lines on stdout are all; the `otel` extra |
 | `GLOSSTHESI_QUEUE_MB` | what may wait for the device, in MB of tables; default 512, half of it at most one caller's — past it a `429` with `Retry-After` |
@@ -83,11 +83,11 @@ table holds nine rows for the periods (three steps by three levels)
 and three for the total, each with the member, the origin
 (`2026-06`), the step, the period, the column and the level.
 
-The walk as glossql declares it: one member per metric, one value
+The walk as glossdb declares it: one member per metric, one value
 column, `origins` 6 and `horizon` 1. The answer holds per metric and
 walked period the bands, the actual and the PIT, read against the
 model's own quantile grid before any `width`. The record of PITs
-stays on glossql's side (`docs/forecast.md`, GK-35).
+stays on glossdb's side (`docs/forecast.md`, GK-35).
 
 Points that shape a client:
 
@@ -127,7 +127,7 @@ Production is GCP, on an L4 behind Cloud Run; the deployment — the
 project, the region, the collector sidecar, who may call — lives in the
 private deployment repo, not here. What it relies on: the service
 scaled to zero and billed by instance time, the cold start waited out
-by the caller (glossql's call timeout is 600 s); CUDA from torch's
+by the caller (glossdb's call timeout is 600 s); CUDA from torch's
 wheels and the driver from the host, so a torch move is checked
 against the host's driver; one instance until 429s say otherwise;
 authentication by identity at the Cloud Run edge and again in the
@@ -192,7 +192,7 @@ Copyright © 2026 Philipp Suter. GNU Affero General Public License,
 version 3 or any later version (`LICENSE`). The service may be used,
 changed and run freely; whoever changes it and runs it for others
 over a network has to offer them the changed source (the licence's
-section 13). glossql is a separate program that talks to the service
+section 13). glossdb is a separate program that talks to the service
 over HTTP. The checkpoints the image bakes carry licences of their
 own: Chronos-2 under Apache-2.0, TabICL under BSD-3-Clause with its
 forecasting part under Apache-2.0.

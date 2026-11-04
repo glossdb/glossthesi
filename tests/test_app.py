@@ -551,7 +551,7 @@ def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
     account passes; the verifier is asked once per token until it expires."""
     monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_AUDIENCE", "https://service.example")
-    monkeypatch.setenv("GLOSSTHESI_CALLERS", "glossql@proj.iam.gserviceaccount.com")
+    monkeypatch.setenv("GLOSSTHESI_CALLERS", "glossdb@proj.iam.gserviceaccount.com")
     monkeypatch.setattr(app_module, "_TOKENS", {})
     asked = []
 
@@ -559,7 +559,7 @@ def test_id_tokens_gate_by_audience_and_account(client, monkeypatch):
         asked.append(token)
         assert audience == "https://service.example"
         if token == "good":
-            return "glossql@proj.iam.gserviceaccount.com", time.time() + 3600
+            return "glossdb@proj.iam.gserviceaccount.com", time.time() + 3600
         if token == "other":
             return "someone@else.iam.gserviceaccount.com", time.time() + 3600
         raise ValueError("not ours")

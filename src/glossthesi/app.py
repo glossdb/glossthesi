@@ -21,7 +21,7 @@ the request counts against:
   test host). The caller is the key's place in the list (`key-1`),
   never the key itself: the caller's name goes to the logs.
 - neither: every request is refused, and the service does not start.
-- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossql.
+- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossdb.
   The doors serve without authentication and every caller is recorded
   as `insecure_dev_mode`. The name is the warning: a laptop trying the
   service out, never a deployment.
@@ -105,7 +105,7 @@ def _keys() -> list[str]:
     return [k.strip() for k in os.environ.get("GLOSSTHESI_KEYS", "").split(",") if k.strip()]
 
 
-INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossql's name for it
+INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossdb's name for it
 UNARRANGED = (
     "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
     "GLOSSTHESI_INSECURE_OPEN=true serves open instead, every caller insecure_dev_mode"

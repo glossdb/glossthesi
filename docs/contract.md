@@ -1,6 +1,6 @@
 # The contract: what crosses the wire
 
-The service's API, as glossql and any other caller meet it. Written
+The service's API, as glossdb and any other caller meet it. Written
 2026-09-30. Every route takes one table and
 a specification, and answers one table with what produced it. The
 what-if route was agreed and built on 2026-10-02
@@ -19,7 +19,7 @@ what produced it and what failed.
 | `application/json` | `{"spec": {…}, "table": {"member": […], "period": […], …}}`: the table column by column, a `null` where a value is missing. | `{"table": {…}, "answer": {…}}`, the table column by column. |
 
 The two encodings carry the same table and the same specification,
-and answer the same. Arrow is what glossql sends: column names and
+and answer the same. Arrow is what glossdb sends: column names and
 types travel with the rows, and nothing is parsed twice. JSON is for
 small bodies and for reading by eye. The answer is in the request's
 encoding. A refusal is always JSON: `{"error": "…"}` with a 4xx, and
@@ -141,13 +141,13 @@ past it; nothing scored is 0.0, green. The rule and the threshold are
 in `assumptions` (`field` `walk`). The verdict is the service's: the
 caller lands it and routes on it, and keeps no rule of its own.
 
-**The walk as glossql declares it.** One member per metric, one
+**The walk as glossdb declares it.** One member per metric, one
 value column, no covariates, `origins` 6, `horizon` 1, the levels of
 the bands, every period sent complete: the calendar is the caller's,
 so a period the data's edge falls inside is not sent, and the newest
 point walked is the newest whole one. The answer holds per metric and
 walked period the bands, the actual, the PIT or why it is withheld,
-and the verdict. The record of walks stays on glossql's side; the
+and the verdict. The record of walks stays on glossdb's side; the
 service reads no record. A dataset whose record says the bands run
 narrow sends a `width` (GK-35: on records of one to two years it does
 not pay yet).
@@ -346,23 +346,14 @@ As before: `Authorization: Bearer …`, a Google-signed ID token for
 `GLOSSTHESI_AUDIENCE` from one of `GLOSSTHESI_CALLERS`, or one of
 `GLOSSTHESI_KEYS`. With neither set every door refuses and the
 service does not start; `GLOSSTHESI_INSECURE_OPEN=true` is the one
-way around, for a laptop. glossql names this
+way around, for a laptop. glossdb names this
 service once. Nothing on the wire names a point.
 
-## What went
+## For glossdb
 
-`/bands` is gone with the context cache, the prepared batching of
-walk rows and the pinned walk and grid fixtures. Its callers were the
-walk, now `/forecast` with `origins`, and the what-if replay grid,
-which `/whatif` replaces with the periods ahead sent as planned and
-under the scenario.
-
-## For glossql
-
-What each point sends and receives, and what the engine may delete.
-The kernel draft's "one general service call" is this contract: a
-table in, a table out, Arrow IPC, the service's name and version on
-every answer, one URL per point.
+What each point sends and receives. The contract is one general
+service call: a table in, a table out, Arrow IPC, the service's name
+and version on every answer, one URL and a route per point.
 
 **The walk (`metric_bands`).** Send the metric series at month
 grain as the one table, complete months only: `member` the metric's
@@ -379,29 +370,19 @@ six known values behind an origin, so a full walk of six needs twelve
 months and a metric of eight months gets two walked periods. The
 service owns the walk's rules — the withheld rule, the displacement,
 the score and its bands; the calendar is the caller's, which sends no
-partial period. The record of walks stays glossql's; the service
+partial period. The record of walks stays glossdb's; the service
 reads none. The bands are the model's own.
 
-May go: the feature recipe and the point-in-time fills in
-`crates/session/src/search/bands.rs`, `BandRead` and `band_points`
-on the runtime trait, `pit_history` on the wire, `band_grid`, and in
-`crates/scripts/src/remote.rs` the JSON matrices: one client sends a
-table and a specification and reads a table and an answer.
-
-**The what-if (`whatif.<scenario>()`).** Send
+**The what-if (`metric_scenario()`).** Send
 the table at the grain at which the overridden column varies from
 row to row, the history as `actual`, and the periods ahead twice,
 as planned and under the plan rewrite, with every concept to be
 answered as a target. Receive the rows above and serve them: the
 sign, the model's rows, the history's estimate and `basis` per
-concept. No what-if logic stays in the door: the grid of strengths
-around the declared factor, the support worlds and the reading
-across them have no successor there. The exact recomputation at the
-declared factor (`replay`) is the door's own arithmetic and not
-part of this route; whether it is still served beside the answer is
-glossql's call.
+concept.
 
-**Configuration.** One URL per point, each naming this service;
-`GLOSSQL_TABICL_URL` goes. The bearer as today: a key, or an ID
-token for the service's audience.
+**Configuration.** One URL, naming this service: the server's
+`GLOSSDB_SERVICE_URL`, the route each call's own. The bearer:
+`GLOSSDB_SERVICE_TOKEN`, a key sent as is, or an ID token minted for
+`GLOSSDB_SERVICE_AUDIENCE`.
 

@@ -5,7 +5,7 @@ the container:
     python -m glossthesi.measure                      # the reads' timings
 
 The forecast and the walk are Chronos-2 through `forecast.py` at the
-shapes glossql sends: the metrics of a workspace as one request, six
+shapes glossdb sends: the metrics of a workspace as one request, six
 walked periods each; a hundred series a year ahead."""
 
 from __future__ import annotations
