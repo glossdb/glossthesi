@@ -458,8 +458,8 @@ def test_a_backtest_answers_its_result_and_withholds_a_pit_below_the_series_reso
     assert all(row["withheld"] is None for row in _rows(got, member="a"))
     # The result: per member the shares inside the 80% and the 90% interval over the points with a PIT, and the newest
     # point; one score over the newest points scored.
-    result = got["answer"]["walk"]
-    assert [(m["member"], m["walked"], m["held_80"], m["held_90"]) for m in result["members"]] == [
+    result = got["answer"]["backtest"]
+    assert [(m["member"], m["backtested"], m["held_80"], m["held_90"]) for m in result["members"]] == [
         ("a", 3, 0.0, 0.0),
         ("flat", 3, 1.0, 1.0),
         ("grid", 3, 0.0, 0.0),
@@ -470,14 +470,14 @@ def test_a_backtest_answers_its_result_and_withholds_a_pit_below_the_series_reso
         {"origin": 11, "period": 12, "pit": None, "displacement": None, "withheld": g[0]["withheld"]},
     ]
     # Two members scored, the largest displacement 1.0: 1.0 squared is above the default threshold.
-    assert (result["score"], result["band"], result["threshold"]) == (1.0, "red", 0.98)
-    assert any(a["field"] == "walk" and a["threshold"] == 0.98 for a in got["answer"]["assumptions"])
+    assert (result["score"], result["state"], result["threshold"]) == (1.0, "red", 0.98)
+    assert any(a["field"] == "backtest" and a["threshold"] == 0.98 for a in got["answer"]["assumptions"])
     # A threshold of 1 makes the same score orange; a series whose actual equals its median scores green by itself.
-    assert client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["walk"]["band"] == "orange"
-    alone = client.send("/forecast", spec, _table(flat=[10] * 11 + [10.5])).json()["answer"]["walk"]
-    assert (alone["score"], alone["band"]) == (0.0, "green")
+    assert client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["backtest"]["state"] == "orange"
+    alone = client.send("/forecast", spec, _table(flat=[10] * 11 + [10.5])).json()["answer"]["backtest"]
+    assert (alone["score"], alone["state"]) == (0.0, "green")
     # A forecast without `origins` carries no backtest result.
-    assert "walk" not in client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]
+    assert "backtest" not in client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]
 
 
 def test_forecast_error_responses(client):

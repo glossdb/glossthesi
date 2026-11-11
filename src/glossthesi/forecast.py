@@ -259,7 +259,7 @@ def backtest_result(displacements: list[float], threshold: float) -> tuple[float
 def backtest_basis(threshold: float) -> dict:
     """The `assumptions` entry for the backtest's result."""
     return {
-        "field": "walk",
+        "field": "backtest",
         "threshold": threshold,
         "basis": f"assumed: the result reads the newest backtested point of every member with a PIT, displacement |2·pit - 1| "
         f"(0 at the median, {EDGES[0]} at the edge of the 10-90 interval, {EDGES[1]} at the edge of the 5-95 interval), the largest of k "

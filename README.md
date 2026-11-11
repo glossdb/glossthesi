@@ -62,7 +62,7 @@ The contract is `docs/contract.md`. In short:
 
 | endpoint | specification | answer table |
 |---|---|---|
-| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for a backtest, `threshold` for its red state | A row per member, origin, step, column and level: `value`; `actual` and `pit` where the table holds the actual value; `withheld` with the reason where a PIT is not given. The answer object's `coverage` says how often each interval covered the actual values on held-out data at that grain and step. With `origins`, its `walk` field carries the backtest's result: per member the share of points inside the 80% and the 90% interval and the newest point, and one score and state over all members |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for a backtest, `threshold` for its red state | A row per member, origin, step, column and level: `value`; `actual` and `pit` where the table holds the actual value; `withheld` with the reason where a PIT is not given. The answer object's `coverage` says how often each interval covered the actual values on held-out data at that grain and step. With `origins`, its `backtest` field carries the backtest's result: per member the share of points inside the 80% and the 90% interval and the newest point, and one score and state over all members |
 | `POST /whatif` | `targets`, `levels` | A row per member, column, status (`held_back`, `plan`, `scenario`), period and level: the model's `value`, the history's estimate with its interval, `sign`, `confidence` and `basis` |
 | `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `checkpoints`, `owner` (the queue's counters) |
 

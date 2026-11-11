@@ -545,7 +545,7 @@ class Forecast:
                     {
                         "member": member,
                         "column": column,
-                        "walked": len(points),
+                        "backtested": len(points),
                         "held_80": float(np.mean([0.1 <= p <= 0.9 for p in pits_known])) if pits_known else None,
                         "held_90": float(np.mean([0.05 <= p <= 0.95 for p in pits_known])) if pits_known else None,
                         "newest": {
@@ -558,7 +558,7 @@ class Forecast:
                     }
                 )
             score, state = forecast.backtest_result(scored, plan.threshold)
-            answer["walk"] = {"score": score, "band": state, "threshold": plan.threshold, "members": members_out}
+            answer["backtest"] = {"score": score, "state": state, "threshold": plan.threshold, "members": members_out}
             assumptions.append(forecast.backtest_basis(plan.threshold))
         if assumptions:
             answer["assumptions"] = assumptions

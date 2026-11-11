@@ -84,7 +84,7 @@ last actual row gets a 400.
 | `totals` | Spans in periods, each from 1 to the horizon. For each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain. The answer's `assumptions` names the value and the data it was fitted on (`docs/forecast.md`, GK-45, GK-48). | none |
 | `grain` | `month`, `week`, `day` or `quarter`. The interval of a total depends on it, and `coverage` reads the grain's table. | `month` |
 | `width` | A number above zero, or one per period ahead. The distance of every quantile from the median is multiplied by it after the model has answered. For a caller whose stored forecasts and actual values show that this dataset's intervals are too narrow or too wide. `glossthesi.forecast.learned_width` computes it from them (GK-35). | 1 |
-| `origins` | A rolling-origin backtest. A number k: the k actual periods before every member's last are each taken as an origin, so that every period forecast one step ahead has its actual value. Or a list of periods: the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it. The covariates' later values in the table are taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT, and the answer object carries the backtest's result (`walk`, below). | one forecast per member, from its last actual period |
+| `origins` | A rolling-origin backtest. A number k: the k actual periods before every member's last are each taken as an origin, so that every period forecast one step ahead has its actual value. Or a list of periods: the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it. The covariates' later values in the table are taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT, and the answer object carries the backtest's result (`backtest`, below). | one forecast per member, from its last actual period |
 | `threshold` | The backtest score above which the result's state is `red`. Above zero and at most 1. | 0.98 |
 
 **The answer table.** One row per member, origin, step, column and
@@ -137,9 +137,9 @@ caller that stores enough of its own forecasts and actual values
 reads those first.
 
 **The backtest's result.** With `origins`, the answer object carries
-`walk`:
+`backtest`:
 
-- `members`: per member and target, `walked`, the number of points
+- `members`: per member and target, `backtested`, the number of points
   backtested one step ahead; `held_80` and `held_90`, the share of
   those points with a PIT inside the 10-90 and the 5-95 interval; and
   `newest`, the point one step ahead of the latest origin: its
@@ -150,12 +150,12 @@ reads those first.
 - `score`: over the newest points that have a PIT, the largest
   displacement raised to the power of their number. This keeps the
   base rate of each edge the same at any number of members.
-- `band`: the result's state. `green` up to a score of 0.8, `yellow`
+- `state`: the result's state. `green` up to a score of 0.8, `yellow`
   up to 0.9, `orange` up to the `threshold`, `red` above it. With no
   point scored the score is 0.0 and the state `green`.
 - `threshold`: the threshold used.
 
-The rule and the threshold are in `assumptions` (`field` `walk`). The
+The rule and the threshold are in `assumptions` (`field` `backtest`). The
 service computes the result. glossdb stores the state as the test's
 state and applies no rule of its own.
 
