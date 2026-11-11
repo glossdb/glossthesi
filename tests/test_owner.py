@@ -1,5 +1,6 @@
-"""The owner's queue: jobs answered one at a time, callers in turn, and
-refused before memory is."""
+"""The device worker's queue (`Owner`): jobs answered one at a time,
+callers in turn, and a full queue answered with an error before host
+memory runs out."""
 
 import threading
 import time
@@ -10,7 +11,7 @@ from glossthesi.owner import Busy, Owner, TooLarge
 
 
 class Gated:
-    """A kernel that holds each job until told, and records the order."""
+    """A stand-in for the models that holds each job until released, and records the order."""
 
     def __init__(self):
         self.gate = threading.Event()
@@ -19,7 +20,7 @@ class Gated:
 
 
 def held(kernel: Gated, **kw) -> Owner:
-    """An owner already inside a job, so what is submitted next waits."""
+    """A worker already inside a job, so that the jobs submitted next wait."""
     own = Owner(lambda: kernel, **kw)
 
     def first(k):
@@ -40,7 +41,7 @@ def job(tag: float):
     return run
 
 
-def test_callers_are_taken_in_turn_and_hear_their_own_answers():
+def test_callers_are_taken_in_turn_and_get_their_own_answers():
     kernel = Gated()
     own = held(kernel)
     flood = [own.exclusive("a", "forecast", 10, job(10.0 + i)) for i in range(3)]
@@ -52,7 +53,7 @@ def test_callers_are_taken_in_turn_and_hear_their_own_answers():
     assert own.stats["jobs"] == 5 and own.stats["cycles"] == 5  # the warm job counts
 
 
-def test_the_queue_pushes_back_before_memory_does():
+def test_a_full_queue_raises_before_host_memory_runs_out():
     kernel = Gated()
     own = held(kernel, queue_mb=1)  # 131072 cells in all, half of it a caller's share
     big = 30_000
@@ -62,7 +63,7 @@ def test_the_queue_pushes_back_before_memory_does():
         own.exclusive("a", "forecast", big, job(3.0))
     assert busy.value.retry_after >= 1
     own.exclusive("b", "forecast", big, job(4.0))  # another caller still gets in
-    with pytest.raises(TooLarge, match="in parts"):
+    with pytest.raises(TooLarge):
         own.exclusive("b", "forecast", 80_000, job(5.0))
     assert own.stats["refused_busy"] == 1
     kernel.gate.set()
@@ -84,7 +85,7 @@ def test_a_failed_job_fails_its_own_caller_recovers_the_device_and_leaves_the_ra
 
     with pytest.raises(RuntimeError, match="out of memory"):
         own.exclusive("a", "forecast", 10, die).result(5)
-    # The caller hears first; the recovery follows once the traceback is dropped.
+    # The caller gets its error first; the recovery follows once the traceback is dropped.
     for _ in range(100):
         if kernel.recovered:
             break

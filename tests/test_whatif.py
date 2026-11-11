@@ -1,5 +1,6 @@
 """The what-if without the model (`docs/whatif.md`): how a series'
-history is read."""
+history is read. The tests assert signs and numbers; the text of a
+`basis` is free to change."""
 
 import numpy as np
 
@@ -35,8 +36,8 @@ def test_the_history_gives_the_slope_with_the_other_inputs_and_the_season_held()
 
 
 def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
-    # A 5-minute table of 200 rows: the run (a day, 288 rows) is longer than the history; drawn as it was, every
-    # resample was the whole history and a noise slope was "off zero" with an interval of no width.
+    # A 5-minute table of 200 rows: the run (a day, 288 rows) is longer than the history. Drawn at that length, every
+    # resample would be the whole history and a noise slope would be "off zero" with an interval of no width.
     rng = np.random.default_rng(0)
     stamps = (np.datetime64("2024-01-01T00:00") + np.arange(200) * np.timedelta64(5, "m")).astype("datetime64[ms]")
     got = whatif.history(stamps, rng.normal(size=200), np.column_stack([rng.normal(size=200)]), whatif.places(rng))
@@ -44,7 +45,7 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
     assert len(np.unique(np.round(got["draws"][:, 0], 12))) > 100 and lo < 0 < hi
 
     # Under no effect, with autocorrelated noise, the 90% interval covers zero about nine times in ten where the cap
-    # bites (30 weekly rows: 35 of 40, where it was 31) and where it does not (400 daily rows: 34 of 40, as before).
+    # applies (30 weekly rows: 35 of 40) and where it does not (400 daily rows: 34 of 40).
     # On 1,000 hourly rows with autocorrelation 0.97 the rows reading covers about 28 of 40: a run of a day is shorter
     # than that dependence, which the cap does not touch (docs/whatif.md, where it is weak).
     def ar(n, rho):
@@ -60,13 +61,13 @@ def test_a_short_or_fine_history_is_drawn_in_runs_shorter_than_itself():
             got = whatif.history(stamps, 50 + 2 * ar(n, rho), np.column_stack([ar(n, rho)]), whatif.places(rng))
             lo, hi = np.quantile(got["draws"][:, 0], [0.05, 0.95])
             covers += lo <= 0 <= hi
-        assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval is honest to within its own noise
+        assert covers >= 30, (n, covers)  # 75% at the least over 40 draws: the interval's coverage, within its own noise
 
 
-def test_a_change_that_points_both_ways_over_the_periods_ahead_is_said_so_and_is_not_no_effect():
+def test_a_change_that_points_both_ways_over_the_periods_ahead_is_not_no_effect():
     # y answers x upward and z downward; the scenario raises x in the first four periods and z in the last nine. The
-    # mean of the history's estimate nets to about nothing, and read on the mean alone the answer was `0`, "no effect
-    # visible", while every period showed an effect. The sign is the horizon's as a whole, and the periods are said.
+    # mean of the history's estimate nets to about nothing while every period shows an effect: the answer is `?`, not
+    # `0`. The sign is the horizon's as a whole, and the estimate per period shows the two directions.
     rng = np.random.default_rng(21)
     stamps = _weekly(periods=160)[0]
     x, z = rng.uniform(0, 1, 160), rng.uniform(0, 1, 160)
@@ -78,21 +79,22 @@ def test_a_change_that_points_both_ways_over_the_periods_ahead_is_said_so_and_is
     m.scenario["z"][4:] = np.minimum(m.plan["z"][4:] + 0.3, z[:147].max())
     plan = np.full(13, 50.0)
     got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.01, starts)
-    assert got["sign"] == "?" and "points both ways" in got["basis"] and "4 up, 9 down" in got["basis"] and "nets to nothing" in got["basis"]
+    assert got["sign"] == "?" and whatif.CONFIDENCE["?"] == "not answerable"
     assert (got["history_value"][:4] > plan[:4]).all() and (got["history_value"][4:] < plan[4:]).all()
-    # Raise x in the first ten periods instead: the horizon's mean is up, the sign is stated, and the periods are said.
+    assert int((got["history_low"] > plan).sum()) == 4 and int((got["history_high"] < plan).sum()) == 9  # 4 periods up, 9 down
+    # Raise x in the first ten periods instead: the horizon's mean is up and the sign is stated.
     m.scenario["x"], m.scenario["z"] = m.plan["x"].copy(), m.plan["z"].copy()
     m.scenario["x"][:10] = np.minimum(m.plan["x"][:10] + 0.3, x[:147].max())
     m.scenario["z"][10:] = np.minimum(m.plan["z"][10:] + 0.3, z[:147].max())
     got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.4, starts)
-    assert got["sign"] == "+" and "10 up, 3 down" in got["basis"] and "the horizon's as a whole" in got["basis"]
-    # One lever raised in every period keeps its sign, as before.
+    assert got["sign"] == "+" and int((got["history_low"] > plan).sum()) == 10 and int((got["history_high"] < plan).sum()) == 3
+    # One input raised in every period keeps its sign.
     assert whatif.reading(_member(stamps, y, {"x": x, "z": z}, "x"), "y", "x", plan, plan, plan + 0.4, starts)["sign"] == "+"
 
 
 def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_spread():
     # A column climbing from 100 to 1,000 with a residual spread of 10 and an input it does not answer: the whole spread
-    # is 260, so a model shift of 25 (2.5 residual spreads) passed as "still" before; now it is a move.
+    # is 260. A model shift of 25 is 2.5 residual spreads and counts as a move; a shift of 0.5 counts as none.
     rng = np.random.default_rng(11)
     stamps = _weekly(periods=200)[0]
     x = rng.uniform(0, 1, 200)
@@ -104,8 +106,8 @@ def test_still_is_judged_against_what_the_history_leaves_not_the_columns_whole_s
     plan = np.full(13, 1000.0)
     moved = whatif.reading(m, "y", "x", plan, plan, plan + 25.0, starts)
     still = whatif.reading(m, "y", "x", plan, plan, plan + 0.5, starts)
-    assert moved["sign"] == "?" and moved["basis"].endswith("and the model moves it")
-    assert still["sign"] == "0" and "what the history leaves" in still["basis"]
+    assert moved["sign"] == "?" and still["sign"] == "0"
+    assert 25.0 > whatif.STILL * read["residual_sd"] > 0.5 and 25.0 < whatif.STILL * whatif.spread(y)
 
 
 def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
@@ -120,9 +122,9 @@ def test_a_daily_series_holds_the_day_of_the_week_and_draws_whole_weeks():
     assert whatif.run_of_rows(whatif.minutes(stamps)) == 14
 
 
-def test_a_reading_that_holds_on_the_rows_alone_is_said_as_such_and_an_unchanged_input_as_unchanged():
-    # A column that drifts on its own beside a drifting input: the rows show a slope, the changes do not; the basis says so
-    # and keeps "no effect" (the sign rule is the conjunction), where before it said the history showed nothing at all.
+def test_a_slope_on_the_rows_alone_states_no_direction_and_an_unchanged_input_is_unchanged():
+    # A column that drifts on its own beside a drifting input: the rows show a slope, the changes do not. The sign rule
+    # needs both, so no direction is stated.
     rng = np.random.default_rng(5)
     stamps = _weekly(periods=240)[0]
     x = np.cumsum(rng.normal(0, 0.1, 240)) + 0.01 * np.arange(240)
@@ -131,21 +133,18 @@ def test_a_reading_that_holds_on_the_rows_alone_is_said_as_such_and_an_unchanged
     m = whatif.Member("a", stamps[:-13], stamps[-13:], {"y": drifts[:-13]}, {"x": x[:-13]}, {"x": x[-13:]}, {"x": np.minimum(x[-13:] + 0.2, x[:-13].max())})
     plan = np.full(13, 20.0)
     got = whatif.reading(m, "y", "x", plan, plan, plan, starts)
-    assert got["sign"] in "0?" and "no effect" in got["basis"] and "both readings" in got["basis"] and "disagree" not in got["basis"]
+    assert got["parts"][0]["history_low"] > 0  # the rows alone show the change moving the column, its interval off zero
+    assert got["sign"] == "0" and whatif.CONFIDENCE["0"] == "no effect visible"
     # An input the same as planned and under the scenario for this member is `=`, unchanged: not "no effect visible".
-    same = (
-        whatif.reading(m, "y", "x", plan, plan, plan, starts)
-        if False
-        else whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
-    )
-    assert same["sign"] == "=" and whatif.CONFIDENCE["="] == "unchanged" and "same as planned" in same["basis"]
+    same = whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
+    assert same["sign"] == "=" and whatif.CONFIDENCE["="] == "unchanged" and np.isnan(same["history_value"]).all()
     # Every threshold the reading uses is declared on the answer.
     declared = {a["value"] for a in whatif.assumptions() if not isinstance(a["value"], str)}
     assert {whatif.INTERVAL, whatif.STILL, whatif.SEPARABLE, whatif.MOSTLY_EMPTY, whatif.TIED, whatif.EXTRA_ROWS} <= declared
 
 
 def test_a_drift_two_columns_merely_share_does_not_show_in_the_changes():
-    # Found on real tables: promotions "moved" the world's oil price, because both drifted over the same years.
+    # Two columns that drift over the same years (promotions and the oil price) show a slope on the rows and none on the changes.
     rng = np.random.default_rng(5)
     stamps = _weekly(periods=240)[0]
     on_rows, on_changes, answered = [], [], []
@@ -171,7 +170,7 @@ def _member(stamps, y, inputs, on, ahead=13):
     return whatif.Member("a", stamps[:cut], stamps[cut:], {"y": y[:cut]}, {c: v[:cut] for c, v in inputs.items()}, plan, scenario)
 
 
-def test_an_input_that_is_mostly_empty_is_not_read_and_the_reason_says_so():
+def test_an_input_that_is_mostly_empty_is_not_read():
     stamps, y, x, z = _weekly()
     starts = whatif.places(np.random.default_rng(1))
     tenth = np.arange(len(y)) % 10 == 0
@@ -184,13 +183,13 @@ def test_an_input_that_is_mostly_empty_is_not_read_and_the_reason_says_so():
 
     # Nine rows in ten of one input are empty. Held with the rest it would leave fifteen rows; it is left out, and x is read.
     got = read({"x": x, "z": z, "markdown": mostly_empty}, "x")
-    assert got["sign"] == "+" and got["basis"].endswith("; not read, being mostly empty: `markdown`")
-    # One row in ten empty: the input is read, at the cost of those rows, and nothing is said.
+    assert got["sign"] == "+" and "`markdown`" in got["basis"]  # the reason names the input left out
+    # One row in ten empty: the input is read, at the cost of those rows, and the reason names no input.
     got = read({"x": x, "z": some_gaps}, "x")
-    assert got["sign"] == "+" and "mostly empty" not in got["basis"]
-    # The input asked about is itself mostly empty: no answer.
+    assert got["sign"] == "+" and "`z`" not in got["basis"]
+    # The input asked about is itself mostly empty: no answer, and the history is not read.
     got = read({"x": x, "markdown": mostly_empty}, "markdown")
-    assert got["sign"] == "?" and got["basis"] == "the input is mostly empty in this member's history"
+    assert got["sign"] == "?" and np.isnan(got["history_value"]).all() and np.isnan(got["history_error"])
 
 
 def test_several_inputs_changed_at_once_are_read_as_the_sum_of_what_each_does():
@@ -204,8 +203,8 @@ def test_several_inputs_changed_at_once_are_read_as_the_sum_of_what_each_does():
     # The history's estimate of the joint change is the sum of the two single estimates, within a few percent: the
     # joint reading holds the lag of each changed input, so it holds one column more than either single reading.
     assert np.allclose(both["history_value"] - plan, (alone["x"]["history_value"] - plan) + (alone["z"]["history_value"] - plan), rtol=0.03)
-    assert (both["sign"] in "+-0?" and "the inputs together" in both["basis"]) or both["basis"].startswith("the model and the history disagree")
-    # One input changed answers as before, to the digit, through the same code.
+    assert both["sign"] in ("+", "-", "0", "?") and [part["input"] for part in both["parts"]] == ["x", "z"]
+    # One input given as a list answers the same as given by name, to the digit.
     one = whatif.reading(m, "y", ["x"], plan, plan, plan + 1.0, starts)
     for key in ("sign", "basis", "explains"):
         assert one[key] == alone["x"][key]
@@ -223,7 +222,7 @@ def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up(
     # A continuous pair: a corner the history never visited is beyond, a point among the rows is not.
     cloud = rng.normal(size=(300, 2))
     assert whatif.beyond_together(cloud, np.array([[6.0, 6.0]])) and not whatif.beyond_together(cloud, np.array([[0.3, -0.2]]))
-    # One mis-keyed history row (a price of 40) no longer sets the reach: the corner is still beyond.
+    # One mistyped history row (a price of 40) does not set the reach: the corner is still beyond.
     assert whatif.beyond_together(np.vstack([cloud, [[0.0, 40.0]]]), np.array([[6.0, 6.0]]))
     # One odd period among thirteen does not fire the check; two do; a plan drawn from the history itself does not.
     ordinary = cloud[rng.choice(300, 13, replace=False)]
@@ -244,7 +243,7 @@ def test_a_combination_the_history_never_held_is_beyond_it_and_the_parts_add_up(
         assert np.isclose(alone["parts"][0]["history_shift"], next(part["history_shift"] for part in both["parts"] if part["input"] == c), rtol=0.03, atol=0.01)
 
 
-def test_one_lag_of_the_changed_input_is_held_and_what_the_period_after_says_is_said():
+def test_one_lag_of_the_changed_input_is_held_and_the_period_after_has_its_own_slope():
     # y answers x by 2 in the same period and moves back by 1 the period after: the sustained effect is 1.
     rng = np.random.default_rng(5)
     n = 200
@@ -260,13 +259,14 @@ def test_one_lag_of_the_changed_input_is_held_and_what_the_period_after_says_is_
     # Not lagged: the lag is NaN and the same-period slope absorbs what it can.
     assert np.isnan(whatif.history(stamps, y, np.column_stack([x]), starts)["lag_slope"]).all()
     # The reading: the switch put on over 13 periods ahead. The first period's estimate is the same-period slope's
-    # alone (the row before is history, the same under both), the rest carry the lag; the reason says the column
-    # moves back in the period after, and the sign is the sustained effect's (+1), which the model agrees with.
+    # alone (the row before is history, the same under both), the rest carry the lag. The sign is the sustained
+    # effect's (+1), which the model agrees with.
     cut = n - 13
     m = whatif.Member("a", stamps[:cut], stamps[cut:], {"y": y[:cut]}, {"x": x[:cut]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
     plan = np.full(13, 50.0)
     got = whatif.reading(m, "y", "x", plan, plan, plan + 1.0, starts)
-    assert got["sign"] == "+" and "the column moves back in the period after the input moves" in got["basis"]
+    moves_back = got["basis"]
+    assert got["sign"] == "+"
     estimate = got["history_value"] - plan
     assert abs(estimate[0] - 2.0) < 0.3 and np.allclose(estimate[1:], 1.0, atol=0.3)
     assert np.isclose(got["parts"][0]["history_shift"], estimate.mean())
@@ -274,12 +274,14 @@ def test_one_lag_of_the_changed_input_is_held_and_what_the_period_after_says_is_
     y2 = 50.0 + 2.0 * behind + rng.normal(0, 0.3, n)
     m2 = whatif.Member("a", stamps[:cut], stamps[cut:], {"y": y2[:cut]}, {"x": x[:cut]}, {"x": np.zeros(13)}, {"x": np.ones(13)})
     got = whatif.reading(m2, "y", "x", plan, plan, plan + 1.0, starts)
-    assert got["sign"] == "+" and "the effect carries into the period after the input moves" in got["basis"]
+    carries_over = got["basis"]
+    assert got["sign"] == "+"
     assert abs(got["history_value"][0] - 50.0) < 0.3 and np.allclose(got["history_value"][1:] - 50.0, 2.0, atol=0.3)
-    # No effect after: nothing is said of the period after, and the door's rule counts the lag's column and row.
+    # No effect in the period after: the three cases give three different reasons. The number of rows a member needs
+    # counts the lag's column and its first row.
     stamps_w, y3, x3, _ = _weekly()
     got = whatif.reading(_member(stamps_w, y3, {"x": x3}, "x"), "y", "x", plan, plan, plan + 0.4, starts)
-    assert got["sign"] == "+" and "period after" not in got["basis"]
+    assert got["sign"] == "+" and len({got["basis"], moves_back, carries_over}) == 3
     assert whatif.rows_needed(stamps_w, 2) == whatif.MIN_HISTORY and whatif.rows_needed(stamps_w, 2, 2) == whatif.MIN_HISTORY
     hourly = (np.datetime64("2021-01-04") + np.arange(60) * np.timedelta64(1, "h")).astype("datetime64[ms]")
     assert whatif.rows_needed(hourly, 2, 0) == 45 and whatif.rows_needed(hourly, 2, 2) == 48

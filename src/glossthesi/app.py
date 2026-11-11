@@ -1,30 +1,31 @@
-"""The doors of the service: one table and a specification in, one
+"""The endpoints of the service: one table and a specification in, one
 table and an answer out (`docs/contract.md`, `wire.py`).
 
-Two reads on the one table — `/forecast` for the periods ahead and
-the walk, `/whatif` for which way a column moves under a changed
-input — and `/healthz`. Nothing here knows about datasets, metrics
-or actors: a request is numbers and a key.
+Two POST endpoints on the one table — `/forecast` for the periods
+ahead and for the rolling-origin backtest, `/whatif` for the direction
+a column moves under a changed input — and `GET /healthz`. Nothing
+here knows about datasets, metrics or actors: a request is numbers and
+a key.
 
-Authentication, by what is set — the same `Authorization: Bearer …`
-header either way, and the caller it names is whose share of the queue
-the request counts against:
+Authentication depends on what is set. The header is
+`Authorization: Bearer …` in each case, and the caller it names is the
+one whose share of the queue the request counts against:
 
 - `GLOSSTHESI_AUDIENCE` and `GLOSSTHESI_CALLERS`: a Google-signed ID
   token for that audience (the service's own URL) from one of the listed
-  service accounts. That is what a caller on Cloud Run, GKE or a VM mints
-  from its metadata server for the URL it calls — no key anywhere. Cloud
-  Run checks the same token in front when the service requires
-  authentication; the service checks it again, so one left open by
-  mistake still refuses. The caller is the account's email.
+  service accounts. A caller on Cloud Run, GKE or a VM gets such a token
+  from its metadata server for the URL it calls, so no key is stored.
+  Cloud Run checks the same token in front when the service requires
+  authentication; the service checks it again, so a service left open
+  by mistake still answers 401. The caller is the account's email.
 - `GLOSSTHESI_KEYS`: shared bearer keys, comma-separated (a laptop, a
-  test host). The caller is the key's place in the list (`key-1`),
-  never the key itself: the caller's name goes to the logs.
-- neither: every request is refused, and the service does not start.
-- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossdb.
-  The doors serve without authentication and every caller is recorded
-  as `insecure_dev_mode`. The name is the warning: a laptop trying the
-  service out, never a deployment.
+  test host). The caller is the key's position in the list (`key-1`),
+  not the key: the caller's name is written to the logs.
+- neither: every request is answered 401, and the service does not start.
+- `GLOSSTHESI_INSECURE_OPEN=true`: the endpoints serve without
+  authentication and every caller is recorded as `insecure_dev_mode`,
+  as in glossdb. For trying the service out on a laptop, not for a
+  deployment.
 """
 
 from __future__ import annotations
@@ -53,8 +54,8 @@ from .wire import Refusal
 SERVICE = "glossthesi"
 VERSION = os.environ.get("GLOSSTHESI_VERSION", "") or "dev"
 
-# Handlers never touch the model: one owner per device takes what is
-# waiting from every caller and answers it in turn (owner.py).
+# Handlers do not call the model: one worker thread per device (`Owner`,
+# owner.py) takes the waiting jobs of every caller in turn.
 _OWNER: Owner | None = None
 _OWNER_LOCK = threading.Lock()
 
@@ -65,9 +66,9 @@ MAX_BODY_MB = int(os.environ.get("GLOSSTHESI_MAX_BODY_MB", "") or 32)
 
 class _Flag:
     """A flag set from a signal handler, so it takes no lock: the handler
-    may be entered again before it returns, and a lock the outer entry
-    holds then stops the main thread for good (`__main__._Server`,
-    glossval GV-30). A bool written under the GIL needs none."""
+    may be entered again before it returns, and a lock held by the outer
+    entry would then block the main thread (`__main__._Server`, glossval
+    GV-30). A bool written under the GIL needs no lock."""
 
     __slots__ = ("_set",)
 
@@ -82,8 +83,8 @@ class _Flag:
 
 
 # Set when the host has asked the process to stop: what is in flight is
-# finished, and a request arriving on a kept connection is sent back to
-# retry (a 503 with `Retry-After`) — the host has already moved traffic.
+# finished, and a request arriving on a kept connection gets a 503 with
+# `Retry-After`: the host has already moved traffic to another instance.
 DRAINING = _Flag()
 
 
@@ -101,28 +102,29 @@ def _names(variable: str) -> set[str]:
 
 
 def _keys() -> list[str]:
-    """The bearer keys in the order set: a key is named by its place."""
+    """The bearer keys in the order set: a key is named by its position in the list."""
     return [k.strip() for k in os.environ.get("GLOSSTHESI_KEYS", "").split(",") if k.strip()]
 
 
-INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossdb's name for it
-UNARRANGED = (
-    "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
-    "GLOSSTHESI_INSECURE_OPEN=true serves open instead, every caller insecure_dev_mode"
+INSECURE_DEV_MODE = "insecure_dev_mode"  # the caller's name where no caller is verified, the same name glossdb uses
+AUTH_NOT_CONFIGURED = (
+    "no authentication is configured: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
+    "GLOSSTHESI_INSECURE_OPEN=true serves without authentication and records every caller as insecure_dev_mode"
 )
 
 
 def insecure_open() -> bool:
-    """Only the literal `true` counts: the switch is a statement, never a fallback."""
+    """True only for the literal `true`; any other value leaves authentication on."""
     return os.environ.get("GLOSSTHESI_INSECURE_OPEN", "").strip() == "true"
 
 
-def arrangement() -> str | None:
-    """How a caller is verified; None where nothing is arranged, and then nothing is served."""
+def auth_mode() -> str | None:
+    """How a caller is verified: `insecure-open`, `id-token` or `keys`. None where no authentication is configured,
+    and then no request is served."""
     if insecure_open():
         return "insecure-open"
     if os.environ.get("GLOSSTHESI_AUDIENCE", "").strip():
-        return "id-token" if _names("GLOSSTHESI_CALLERS") else None  # an audience nobody is allowed for is nothing arranged
+        return "id-token" if _names("GLOSSTHESI_CALLERS") else None  # an audience without allowed callers is not a configuration
     return "keys" if _keys() else None
 
 
@@ -181,7 +183,7 @@ def _caller(request: Request) -> str | None:
         return email if email is not None and email in callers else None
     if not token:
         return None
-    # A key is never the caller's name — the name goes to the logs — and every key is compared, in constant time.
+    # The caller's name is the key's position, not the key, because the name is logged. Every key is compared, in constant time.
     found = None
     for i, key in enumerate(_keys(), start=1):
         if hmac.compare_digest(token.encode(), key.encode()):
@@ -204,20 +206,21 @@ async def _body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _door(read):
-    """Wrap a read: auth, the body as a table and a specification, the
-    owner's queue, the answer in the request's encoding, refusals as JSON."""
+def _endpoint(read):
+    """Wrap one kind of request: authentication, the body as a table and
+    a specification, the worker's queue, the answer in the request's
+    encoding, error responses as JSON."""
 
-    async def endpoint(request: Request) -> Response:
-        route = request.url.path
+    async def handler(request: Request) -> Response:
+        path = request.url.path
         if DRAINING.is_set():
-            telemetry.refused(503, None, route, "draining")
+            telemetry.refused(503, None, path, "draining")
             return JSONResponse({"error": "this instance is stopping — retry"}, status_code=503, headers={"Retry-After": "2"})
         caller = await run_in_threadpool(_caller, request)
         if caller is None:
-            telemetry.refused(401, None, route, "unauthorized")
-            said = "unauthorized: a bearer this service accepts" if arrangement() else f"unauthorized: {UNARRANGED}"
-            return JSONResponse({"error": said}, status_code=401)
+            telemetry.refused(401, None, path, "unauthorized")
+            message = "unauthorized: send a bearer token this service accepts" if auth_mode() else f"unauthorized: {AUTH_NOT_CONFIGURED}"
+            return JSONResponse({"error": message}, status_code=401)
         try:
             raw = await _body(request)
             parsed = await run_in_threadpool(wire.parse, request.headers.get("content-type", ""), raw, MAX_BODY_MB * 1024 * 1024)
@@ -233,21 +236,21 @@ def _door(read):
             refusal, status, headers = e, 413, None
         except (kernels.KernelError, forecast.ForecastError, whatif.WhatifError) as e:
             refusal, status, headers = e, 422, None
-        except Exception as e:  # noqa: BLE001 — a failure is a 500 with the traceback in the log, not on the wire
-            telemetry.log.error("request_failed", extra={"route": route, "caller": caller}, exc_info=e)
-            telemetry.refused(500, caller, route, type(e).__name__)
+        except Exception as e:  # noqa: BLE001 — a failure is a 500 with the traceback in the log, not in the response
+            telemetry.log.error("request_failed", extra={"route": path, "caller": caller}, exc_info=e)
+            telemetry.refused(500, caller, path, type(e).__name__)
             return JSONResponse({"error": f"the service failed: {type(e).__name__}"}, status_code=500)
-        telemetry.refused(status, caller, route, str(refusal))
+        telemetry.refused(status, caller, path, str(refusal))
         body: dict[str, Any] = {"error": str(refusal)}
         if isinstance(refusal, Refusal) and refusal.errors:
             body["errors"] = refusal.errors
         return JSONResponse(body, status_code=status, headers=headers)
 
-    return endpoint
+    return handler
 
 
 def _spec(field: str, message: str, status: int = 400) -> Refusal:
-    """A specification refused: the message, and the field at fault named for an agent to repair."""
+    """An error for one field of the specification: the message, and the field's name so that an agent can repair it."""
     return Refusal(message, status, [{"field": field, "error": message}])
 
 
@@ -299,15 +302,15 @@ class _ForecastPlan:
     values: dict[str, np.ndarray]
     status: np.ndarray
     errors: list[dict] = field(default_factory=list)
-    demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, said in `assumptions`
-    walk: bool = False  # `origins` given: the answer carries the walk's verdict
+    demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, listed in `assumptions`
+    backtest: bool = False  # `origins` given: the answer carries the backtest's result
     threshold: float = forecast.THRESHOLD
 
 
 class Forecast:
     """Quantile forecasts by Chronos-2 (`forecast.py`) of the `targets`
     of every member, `horizon` periods past its last actual row — or,
-    with `origins`, from past origins: the walk and a backtest, with
+    with `origins`, from past origins: a rolling-origin backtest, with
     the actual value and the PIT where the table holds the actual.
 
     The table's actual rows are a member's history, in period order;
@@ -331,7 +334,7 @@ class Forecast:
         if origins is not None and not (
             (isinstance(origins, int) and not isinstance(origins, bool) and origins >= 1) or (isinstance(origins, list) and origins)
         ):
-            raise _spec("origins", "`origins` is a number of periods to walk, or a non-empty list of periods to forecast from")
+            raise _spec("origins", "`origins` is the number of past periods to backtest, or a non-empty list of periods to forecast from")
         horizon = spec.get("horizon", 1 if origins is not None else None)
         if not isinstance(horizon, int) or isinstance(horizon, bool) or not 1 <= horizon <= forecast.MAX_HORIZON:
             raise _spec("horizon", f"`horizon` is how many periods ahead, a whole number from 1 to {forecast.MAX_HORIZON}")
@@ -351,7 +354,7 @@ class Forecast:
         levels = _levels(spec, (forecast.GRID[0], forecast.GRID[-1]))
         threshold = spec.get("threshold", forecast.THRESHOLD)
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold <= 1:
-            raise _spec("threshold", "`threshold` is the walk's red line, a number above zero and at most 1")
+            raise _spec("threshold", "`threshold` is the backtest score above which the state is red, a number above zero and at most 1")
 
         table, members = wire.by_member(table, "/forecast")
         status = wire.status(table)
@@ -362,7 +365,7 @@ class Forecast:
         words = {c: wire.categories(table, c) for c in texts}
         covariates = [c for c in numbers + texts if c not in targets]
         errors: list[dict] = []
-        walks: list[list[_Input]] = []  # per member, its inputs oldest origin first
+        per_member: list[list[_Input]] = []  # per member, its inputs oldest origin first
         demoted: dict[tuple[str, str], dict] = {}
         for member, s, e in members:
             actual = status[s:e] == "actual"
@@ -378,7 +381,9 @@ class Forecast:
             elif isinstance(origins, int):
                 mine = [n - 1 - j for j in range(origins, 0, -1) if n - 1 - j >= 0]
                 if len(mine) < origins:
-                    errors.append({"member": member, "error": f"{n} actual periods: a walk of {origins} needs {origins + 1}; {len(mine)} walked"})
+                    errors.append(
+                        {"member": member, "error": f"{n} actual periods: a backtest of {origins} origins needs {origins + 1}; {len(mine)} backtested"}
+                    )
             else:
                 labels = [str(v) for v in wire.clean(periods.slice(s, n).to_pylist())]
                 mine = []
@@ -412,9 +417,9 @@ class Forecast:
                             "basis": f"assumed: `{c}` is known over the history only — the rows ahead do not hold it for the whole horizon ({why}), so it informed the forecast as a past covariate, not as a known future",
                         }
                 inputs.append(_Input(member, s, e, s + o, forecast.Series(history, past, future, width)))
-            walks.append(inputs)
+            per_member.append(inputs)
         # Origin-major, so that the series forecast together are those of one origin, as a request per origin would send them.
-        ordered = [walk[j] for j in range(max((len(w) for w in walks), default=0)) for walk in walks if j < len(walk)]
+        ordered = [mine[j] for j in range(max((len(m) for m in per_member), default=0)) for mine in per_member if j < len(mine)]
         return _ForecastPlan(
             table,
             targets,
@@ -427,7 +432,7 @@ class Forecast:
             status,
             errors,
             list(demoted.values()),
-            walk=origins is not None,
+            backtest=origins is not None,
             threshold=float(threshold),
         )
 
@@ -442,7 +447,7 @@ class Forecast:
         h, levels = plan.horizon, np.asarray(plan.levels)
         cols: dict[str, list] = {name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit", "withheld")}
         errors = list(plan.errors)
-        walked: dict[tuple[str, str], list[tuple[int, Any, float, str | None]]] = {}  # per member and target, its step-one points with an actual
+        backtested: dict[tuple[str, str], list[tuple[int, Any, float, str | None]]] = {}  # per member and target, its step-one points with an actual
         for one, answer in zip(plan.inputs, got):
             where = {"member": one.member, "origin": _period(periods, one.origin)}
             if isinstance(answer, Exception):
@@ -460,7 +465,7 @@ class Forecast:
                     known = plan.status[one.origin + 1 : one.origin + 1 + ahead] == "actual"
                     actual[:ahead] = np.where(known, plan.values[target][one.origin + 1 : one.origin + 1 + ahead], np.nan)
                 pits = np.array([forecast.pit(raw[step], actual[step]) if np.isfinite(actual[step]) else np.nan for step in range(h)])
-                # The withheld rule, the service's own: a PIT read against a corridor narrower than the series' grid says nothing
+                # When a PIT is withheld: read against a range narrower than the series' resolution it carries no information
                 history = plan.values[target][one.start : one.origin + 1]
                 grid_step = forecast.resolution(history)
                 withheld: list[str | None] = [None] * h
@@ -472,8 +477,8 @@ class Forecast:
                         )
                         if withheld[step] is not None:
                             pits[step] = np.nan
-                if plan.walk and np.isfinite(actual[0]):
-                    walked.setdefault((one.member, target), []).append((one.origin, _period(periods, one.origin + 1), float(pits[0]), withheld[0]))
+                if plan.backtest and np.isfinite(actual[0]):
+                    backtested.setdefault((one.member, target), []).append((one.origin, _period(periods, one.origin + 1), float(pits[0]), withheld[0]))
                 n = h * len(levels)
                 cols["member"] += [one.member] * n
                 cols["origin"] += [one.origin] * n
@@ -525,11 +530,11 @@ class Forecast:
         if alone:
             assumptions.append(forecast.alone(alone))
         assumptions += plan.demoted
-        if plan.walk:
-            # The walk's verdict, the service's own: per member and target the held shares over the walked points with a
-            # PIT and the newest point's displacement; one score and band over every newest point scored
+        if plan.backtest:
+            # The backtest's result: per member and target, the share of backtested points with a PIT inside the 80% and
+            # the 90% interval, and the newest point's displacement; one score and state over every newest point scored.
             members_out, scored = [], []
-            for (member, column), points in sorted(walked.items()):
+            for (member, column), points in sorted(backtested.items()):
                 points.sort(key=lambda p: p[0])
                 origin_row, period, newest_pit, why = points[-1]
                 pits_known = [p for _, _, p, w in points if w is None and np.isfinite(p)]
@@ -552,9 +557,9 @@ class Forecast:
                         },
                     }
                 )
-            score, band = forecast.verdict(scored, plan.threshold)
-            answer["walk"] = {"score": score, "band": band, "threshold": plan.threshold, "members": members_out}
-            assumptions.append(forecast.walk_basis(plan.threshold))
+            score, state = forecast.backtest_result(scored, plan.threshold)
+            answer["walk"] = {"score": score, "band": state, "threshold": plan.threshold, "members": members_out}
+            assumptions.append(forecast.backtest_basis(plan.threshold))
         if assumptions:
             answer["assumptions"] = assumptions
         return table, answer
@@ -590,8 +595,7 @@ def _stamps(table: pa.Table) -> np.ndarray:
 
 def _input(table: pa.Table, name: str) -> np.ndarray:
     """An input as numbers: a yes-or-no column as 1 and 0, a text
-    column as whether there is an entry (as the tests read a holiday's
-    name)."""
+    column as whether there is an entry (a holiday's name)."""
     kind = table.schema.field(name).type
     if pa.types.is_boolean(kind):
         return np.asarray(table.column(name).cast(pa.float64()).to_numpy(zero_copy_only=False), dtype=np.float64)
@@ -683,7 +687,7 @@ class Whatif:
 
     @staticmethod
     async def serve(own: Owner, caller: str, plan: _WhatifPlan) -> tuple[pa.Table, dict]:
-        # The median is always read: the shift and the history's estimate are taken from it.
+        # The median is read in every request: the shift and the history's estimate are taken from it.
         quantiles = sorted(set(plan.levels) | {whatif.MEDIAN})
         asked, median = [quantiles.index(a) for a in plan.levels], quantiles.index(whatif.MEDIAN)
         todo = [(i, t) for i in range(len(plan.members)) for t in plan.targets]
@@ -769,8 +773,8 @@ class Whatif:
 
 
 async def healthz(_: Request) -> Response:
-    """Alive, and what the owner has done: `owner` carries its counters
-    and the time of its last cycle, for a probe that wants more than the port."""
+    """Liveness, and the worker's counters: `owner` carries them and the
+    time of its last job, for a health check that needs more than the open port."""
     k = kernels.peek()
     own = _OWNER
     return JSONResponse(
@@ -790,8 +794,8 @@ app = telemetry.asgi(
     Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
-            Route("/forecast", _door(Forecast), methods=["POST"]),
-            Route("/whatif", _door(Whatif), methods=["POST"]),
+            Route("/forecast", _endpoint(Forecast), methods=["POST"]),
+            Route("/whatif", _endpoint(Whatif), methods=["POST"]),
         ]
     )
 )

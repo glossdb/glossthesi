@@ -1,16 +1,16 @@
-"""One owner per device, fed by a bounded queue.
+"""One worker thread per device (`Owner`), fed by a bounded queue.
 
-Handlers do not touch the model: they hand the owner a job and await
-it. The owner is one thread. It takes the waiting jobs one at a time,
-callers in turn, so one caller's burst does not hold the device from
-the rest, and an idle service answers at once. A job has the device to
-itself: a forecast of a request's series, the what-if of a member's history.
+Handlers do not call the model: they give the worker a job and await
+it. The worker takes the waiting jobs one at a time, callers in turn,
+so one caller's burst does not keep the device from the others, and an
+idle service answers at once. A job has the device to itself: the
+forecast of a request's series, the what-if of a request's members.
 
-The queue pushes back before memory does. Waiting jobs are arrays in
-host memory, so the bound is on what they hold — cells, not requests —
-with a share of it per caller. A job that does not fit is refused with
-how long to wait (`Busy`, a 429), and one too large ever to fit is
-refused outright (`TooLarge`, a 413)."""
+The queue is bounded before host memory runs out. Waiting jobs are
+arrays in host memory, so the bound is on what they hold — cells, not
+requests — with a share of it per caller. A job that does not fit now
+gets a 429 with how long to wait (`Busy`), and a job larger than one
+caller's share gets a 413 (`TooLarge`)."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from typing import Any
 
 from . import telemetry
 
-BYTES_PER_CELL = 8  # the reads wait as float64
+BYTES_PER_CELL = 8  # the values wait as float64
 
 
 def _mb(name: str, default: int) -> int:
@@ -42,7 +42,7 @@ class Busy(Exception):
 
 
 class TooLarge(Exception):
-    """A request larger than the queue will ever hold."""
+    """A request larger than one caller's share of the queue."""
 
 
 @dataclass
@@ -51,7 +51,7 @@ class _Job:
     kind: str  # the job's name: "forecast", "whatif"
     cells: int
     future: Future
-    run: Callable[[Any], Any]  # the kernel in, the answer out
+    run: Callable[[Any], Any]  # takes the loaded models, returns the answer
 
 
 class Owner:
@@ -73,7 +73,7 @@ class Owner:
 
     def exclusive(self, caller: str, name: str, cells: int, run: Callable[[Any], Any]) -> Future:
         """A job that has the device to itself for its turn: `run` takes
-        the kernel and returns the answer, or raises."""
+        the loaded models and returns the answer, or raises."""
         job = _Job(caller, name, cells, Future(), run)
         with self._wake:
             if job.cells > self.max_cells * self.caller_share:
@@ -82,7 +82,7 @@ class Owner:
                     f"queue is {int(self.max_cells * self.caller_share) * BYTES_PER_CELL >> 20} MB — send it in parts"
                 )
             mine = self._cells_of.get(job.caller, 0)
-            # A caller alone may fill its share; the queue as a whole is never overfilled.
+            # One caller may fill its share; the queue as a whole stays within its bound.
             if self._cells + job.cells > self.max_cells or mine + job.cells > self.max_cells * self.caller_share:
                 self.stats["refused_busy"] += 1
                 wait = (self._cells / self._rate) if self._rate > 0 else 1.0
@@ -93,7 +93,7 @@ class Owner:
             self._wake.notify()
         return job.future
 
-    # -- the owner's side ----------------------------------------------------
+    # -- the worker's side ---------------------------------------------------
 
     def _take(self) -> _Job:
         """The next job: the oldest of the caller longest unserved; that
@@ -123,7 +123,7 @@ class Owner:
             try:
                 with telemetry.span("owner.cycle", kind=job.kind, jobs=1):
                     job.future.set_result(job.run(self._kernels_get()))
-            except BaseException as e:  # noqa: BLE001 — the owner must outlive any one job
+            except BaseException as e:  # noqa: BLE001 — the worker thread must survive a failed job
                 failed = True
                 if not job.future.done():
                     job.future.set_exception(e)
@@ -145,5 +145,5 @@ class Owner:
             recover = getattr(self._kernels_get(), "recover", None)
             if recover is not None:
                 recover()
-        except Exception as e:  # noqa: BLE001 — recovery failing is logged, never fatal
+        except Exception as e:  # noqa: BLE001 — a failed recovery is logged and the worker goes on
             telemetry.log.error("recover_failed", extra={"error": f"{type(e).__name__}: {e}"})

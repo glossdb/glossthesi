@@ -1,6 +1,6 @@
-"""How often the forecast's bands held on held-out data: the table a
-caller reads before handing out a range, served on every `/forecast`
-answer as `coverage` (`docs/contract.md`).
+"""How often the forecast's intervals covered the actual values on
+held-out data: the table a caller reads before it shows a range,
+served on every `/forecast` answer as `coverage` (`docs/contract.md`).
 
 Per grain, at every step glossdb asks (12 months, 13 weeks, 31 days,
 4 quarters) and at every span up to that horizon: the share of actual
@@ -9,29 +9,29 @@ values inside the 80% interval (levels 0.10 to 0.90) and inside the
 standard error, clustered by series and by origin, with how many
 datasets the share pools, so that a caller's rule can tell 0.75 ± 0.05
 from 0.80 ± 0.01. Measured
-by rolling-origin backtests through this route on datasets the set-up
-was not chosen on (`docs/forecast.md`, GK-46): the evaluation's sealed
+by rolling-origin backtests through `/forecast` on datasets the
+configuration was not chosen on (`docs/forecast.md`, GK-46): the evaluation
 runs of 2026-10-13 (the steps of every grain, the spans of months and
 weeks) and 2026-10-15 (the spans of days and quarters, at the
 dependence measured for them, GK-48). A step's share is the model's
 own. A span's share depends on the dependence the total's interval was
-combined with (`forecast.DEPENDENCE`), so each grain's spans record the
+combined with (`forecast.DEPENDENCE`), so each grain's spans store the
 value they were measured at, and they are served only while the service
 combines with that value: a grain whose dependence differs serves its
 steps and no spans until the table is measured again. The day's and the
 quarter's dependence was fitted on the same datasets (GK-48), so their
-spans' shares are fits, not held-out readings; the answer's
+spans' shares are fits, not held-out measurements; the answer's
 `assumptions` names the basis per grain.
 
-A share pooled over many datasets is a default. A caller with its own
-record of forecasts and what then happened reads that first."""
+A share pooled over many datasets is a default. A caller that stores
+its own forecasts and actual values reads those first."""
 
 from __future__ import annotations
 
 from . import forecast
 
-# The bands measured, by the levels that bound them, in the order of the tuples below.
-BANDS = ((0.10, 0.90), (0.05, 0.95))
+# The intervals measured, by the levels that bound them, in the order of the tuples below.
+INTERVALS = ((0.10, 0.90), (0.05, 0.95))
 # What the spans of each grain were combined with when the table was measured.
 MEASURED_AT = {"month": 0.43, "week": 0.22, "day": 0.12, "quarter": 0.25}
 # Per grain, how many held-out datasets the shares pool.
@@ -198,19 +198,19 @@ MEASURED_ON = {
 
 def basis(grain: str) -> dict:
     """What the served shares rest on, for the answer's `assumptions`: the datasets they pool, the histories behind
-    them, and the error the table does not carry. A caller whose series are shorter, mostly zero or unlike these
-    datasets reads the shares as a default, not as its own."""
+    them, and the error the table does not carry. For a caller whose series are shorter, mostly zero or unlike these
+    datasets the shares are a default, not a measurement of its own data."""
     return {"field": "coverage", "grain": grain, "basis": MEASURED_ON[grain]}
 
 
-def _entry(step: int, span: int | None, band: int, row: tuple, grain: str) -> dict:
+def _entry(step: int, span: int | None, interval: int, row: tuple, grain: str) -> dict:
     return {
         "step": step,
         "span": span,
-        "low": BANDS[band][0],
-        "high": BANDS[band][1],
-        "share": row[2 * band],
-        "se": row[2 * band + 1],
+        "low": INTERVALS[interval][0],
+        "high": INTERVALS[interval][1],
+        "share": row[2 * interval],
+        "se": row[2 * interval + 1],
         "points": row[4],
         "datasets": DATASETS[grain],
     }
@@ -218,15 +218,18 @@ def _entry(step: int, span: int | None, band: int, row: tuple, grain: str) -> di
 
 def held(grain: str, horizon: int, spans: list[int], levels: list[float]) -> list[dict]:
     """The `coverage` entries of an answer: per step up to `horizon`
-    and per span in `spans`, for each band in `BANDS` whose two levels
-    the request asked, the share that held, its standard error, the points behind it and the datasets pooled.
-    A step beyond the table, a band the request's levels do not form,
-    or a span at a dependence other than the one the spans were
+    and per span in `spans`, for each interval in `INTERVALS` whose two
+    levels the request asked, the share of actual values inside it, its
+    standard error, the points behind it and the datasets pooled. A
+    step beyond the table, an interval the request's levels do not
+    form, or a span at a dependence other than the one the spans were
     measured at has no entry."""
     table = HELD.get(grain)
     if table is None:
         return []
-    asked = [i for i, (low, high) in enumerate(BANDS) if any(abs(level - low) < 1e-9 for level in levels) and any(abs(level - high) < 1e-9 for level in levels)]
+    asked = [
+        i for i, (low, high) in enumerate(INTERVALS) if any(abs(level - low) < 1e-9 for level in levels) and any(abs(level - high) < 1e-9 for level in levels)
+    ]
     out = []
     for step in range(1, min(horizon, len(table["steps"])) + 1):
         row = table["steps"][step - 1]

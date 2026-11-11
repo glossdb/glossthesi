@@ -6,18 +6,18 @@
 # This is not CI (tests.yml is): nothing here runs on push. The tests
 # run first all the same, so no image is built from a commit that fails
 # them; and the started image answers a forecast and a what-if, not only
-# /healthz, so an image whose routes are broken is not pushed.
+# /healthz, so an image whose endpoints are broken is not pushed.
 #
 # The image is public on GHCR, so Cloud Run pulls it directly — no
 # Artifact Registry, no project name here. The version is `version` in
 # pyproject.toml, the one bump point: the tag has to match it. Every
-# build bakes `<version>+<commit>` as GLOSSTHESI_VERSION (/healthz,
-# every log line), whichever route built it — so a tag on a commit that
-# already has its :sha-<commit> image does not build again: it names
-# that image, the one that was deployed and tested, :<version> and
+# build sets `<version>+<commit>` as GLOSSTHESI_VERSION (/healthz,
+# every answer, the start log line), whether a tag or a manual run
+# built it — so a tag on a commit that already has its :sha-<commit>
+# image does not build again: that image gets the tags :<version> and
 # :latest. A commit without an image is built, started on the runner's
-# CPU and asked /healthz — the checkpoints baked, every voice loaded,
-# the version right — and pushed.
+# CPU and asked /healthz — the checkpoints in the image, every model
+# loaded, the version right — and pushed.
 name: release
 
 on:
@@ -113,7 +113,7 @@ jobs:
           echo "$health"
           [ "$(echo "$health" | jq -r .loaded)" = true ] || { echo "not loaded"; exit 1; }
           [ "$(echo "$health" | jq -r .version)" = "$VERSION" ] || { echo "version is not $VERSION"; exit 1; }
-          # One forecast and one what-if through the doors, in the JSON encoding: the routes answer, nothing fails alone.
+          # One forecast and one what-if through the endpoints, in the JSON encoding: both answer, nothing fails on its own.
           python3 - <<'PY'
           import datetime, json
           months = [f"2025-{m:02d}" for m in range(1, 9)]
@@ -130,11 +130,11 @@ jobs:
                               "sales": sales + [None] * 4, "promo": promo + [0.0, 0.0] + [1.0, 1.0]}}
           json.dump({"forecast": forecast, "whatif": whatif}, open("bodies.json", "w"))
           PY
-          for route in forecast whatif; do
-            jq ".$route" bodies.json > body.json
-            code=$(curl -s -o answer.json -w '%{http_code}' -H 'authorization: Bearer smoke' -H 'content-type: application/json' --data @body.json "http://127.0.0.1:8100/$route")
-            [ "$code" = 200 ] || { echo "/$route answered $code"; cat answer.json; exit 1; }
-            [ "$(jq '.answer.errors | length' answer.json)" = 0 ] || { echo "/$route failed an item"; jq .answer.errors answer.json; exit 1; }
+          for name in forecast whatif; do
+            jq ".$name" bodies.json > body.json
+            code=$(curl -s -o answer.json -w '%{http_code}' -H 'authorization: Bearer smoke' -H 'content-type: application/json' --data @body.json "http://127.0.0.1:8100/$name")
+            [ "$code" = 200 ] || { echo "/$name answered $code"; cat answer.json; exit 1; }
+            [ "$(jq '.answer.errors | length' answer.json)" = 0 ] || { echo "/$name failed an item"; jq .answer.errors answer.json; exit 1; }
           done
           docker rm -f kernel
       - if: steps.built.outputs.found != 'true'

@@ -1,21 +1,22 @@
 """Forecasts of time series: Chronos-2, as its package ships it.
 
-One set-up, chosen on forecasts a quarter and a year ahead
+One configuration, measured on forecasts a quarter and a year ahead
 (`docs/forecast.md`):
 
 - The series of a request are forecast together, in groups of at most
-  100, so that they inform each other. That is how the published
-  results of Chronos-2 are made. A series mostly made of zeros
-  (`MOSTLY_ZERO`, spare parts) is forecast by itself: together with
-  the others it loses its band, alone it holds it (GK-66).
+  100, so that they inform each other. The published results of
+  Chronos-2 are made the same way. A series mostly made of zeros
+  (`MOSTLY_ZERO`, spare parts) is forecast by itself: forecast with
+  the others its intervals cover too little, by itself they cover
+  their nominal share (GK-66).
 - Covariates are passed where the request has them: their values over
   the history, and over the periods ahead where they are known.
 - The quantiles are the model's own. Nothing is recalibrated. A
-  client that has learned, from its own record of forecasts and what
-  then happened, that a dataset's intervals are too narrow or too
-  wide sends a `width`: the distance of every quantile from the median
-  is multiplied by it, one factor or one per period ahead. The rule
-  for learning it from such a record is `learned_width`.
+  client whose stored forecasts and actual values show that a
+  dataset's intervals are too narrow or too wide sends a `width`: the
+  distance of every quantile from the median is multiplied by it, one
+  factor or one per period ahead. The rule for learning it from
+  stored forecasts is `learned_width`.
 - A series may have several columns (the sales and the orders of one
   store): they are forecast as one, each column informed by the
   others, and answered each.
@@ -26,10 +27,11 @@ One set-up, chosen on forecasts a quarter and a year ahead
   added as independent too narrow. Week-to-week errors are less alike
   than month-to-month errors, and day-to-day errors less still, so
   weekly and daily totals need less dependence.
-- The walk and a backtest are forecasts from past origins. Where the
-  actual value has landed, the PIT is read against the model's own
-  quantile grid (`GRID`), before any width: the quantile at which the
-  actual landed, 0 to 1.
+- A rolling-origin backtest is a forecast from past origins. Where
+  the table holds the actual value, the PIT (probability integral
+  transform) is read against the model's own quantile grid (`GRID`),
+  before any width: the quantile level of the actual value in the
+  forecast distribution, 0 to 1.
 
 A series is values in the client's time grain. The model is not told
 the grain and needs no calendar; only the interval of a total uses
@@ -48,14 +50,15 @@ MODEL = "amazon/chronos-2"
 REVISION = "29ec3766d36d6f73f0696f85560a422f50e8498c"
 GROUP = 100  # series forecast together, at most: the size the model's published results were made with
 # A series at least this share of whose known values are zero is forecast by itself, not with the others of its request:
-# forecast together, such series lose their band, and the gain of going alone starts at this share (GK-66).
+# forecast together, the intervals of such series cover too little, and forecasting them alone helps from this share on (GK-66).
 MOSTLY_ZERO = 0.5
 MIN_HISTORY = 6  # known values a series needs
 MAX_HORIZON = 1024
 # Between the periods of a span, per grain: the value at which the total's 80% interval covers 0.80 of
 # the actual totals. The combination is the sum of equicorrelated normals, so the value reads as a
 # correlation; it is fitted to the coverage and so takes up whatever bias the medians carry, and per
-# dataset it runs from 0.0 to 1.0 (GK-45): a width for the band, not a measured dependence of the errors. Months and weeks on the development backtests, quarter and year pooled, with a
+# dataset it runs from 0.0 to 1.0 (GK-45): a width for the interval, not a measured dependence of the
+# errors. Months and weeks on the development backtests, quarter and year pooled, with a
 # bootstrap standard error of 0.02 and 0.04 (`docs/forecast.md`, GK-45). Days and quarters on the held-out
 # backtests of the coverage table, the calendar month's and the year's totals, standard error 0.01 and
 # 0.06: there is no other daily or quarterly data, so each dataset was also read at the value the others
@@ -65,10 +68,10 @@ GRAINS = tuple(DEPENDENCE)
 _BASIS = {
     **dict.fromkeys(
         ("month", "week"),
-        "fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the development backtests (GK-45): a width for the band, written as a correlation, not a measured dependence between the periods' errors; per dataset it runs from 0.0 to 1.0",
+        "fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the development backtests (GK-45): a width for the interval, written as a correlation, not a measured dependence between the periods' errors; per dataset it runs from 0.0 to 1.0",
     ),
     **{
-        g: f"fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the held-out {w} backtests, the only {w} data, checked by leaving one dataset out (GK-48): a width for the band, written as a correlation, not a measured dependence between the periods' errors"
+        g: f"fitted: the equicorrelation at which the total's 80% interval covers 0.80 of the actual totals on the held-out {w} backtests, the only {w} data, checked by leaving one dataset out (GK-48): a width for the interval, written as a correlation, not a measured dependence between the periods' errors"
         for g, w in (("day", "daily"), ("quarter", "quarterly"))
     },
 }
@@ -162,7 +165,7 @@ def alone(count: int) -> dict:
         "field": "members",
         "value": MOSTLY_ZERO,
         "count": count,
-        "basis": f"measured: a series at least this share of whose known values are zero is forecast by itself, not together with the others of the request, because together such series lose their band and the others gain from being together (GK-66); {count} such series in this request",
+        "basis": f"measured: a series at least this share of whose known values are zero is forecast by itself, not together with the others of the request, because together the intervals of such series cover too little, and the other series gain from being forecast together (GK-66); {count} such series in this request",
     }
 
 
@@ -173,8 +176,9 @@ def dependence(grain: str) -> dict:
 
 
 def pit(grid: np.ndarray, actual: float) -> float:
-    """The quantile at which `actual` landed in the model's own
-    distribution: `grid` holds the quantiles at the levels of `GRID`.
+    """The quantile level of `actual` in the model's own distribution
+    (the probability integral transform): `grid` holds the quantiles at
+    the levels of `GRID`.
     Linear between two levels; the midpoint of the tied levels where
     the grid holds the actual's value exactly (a zero month of a
     mostly-zero series); 0 below the lowest quantile and 1 above the
@@ -197,8 +201,8 @@ def pit(grid: np.ndarray, actual: float) -> float:
     return float(levels[lo] + (levels[hi] - levels[lo]) * (actual - g[lo]) / (g[hi] - g[lo]))
 
 
-THRESHOLD = 0.98  # the walk's red line, unless the specification names one
-EDGES = (0.8, 0.9)  # displacement at the 10-90 band's edge and at the 5-95 band's: green to the first, yellow to the second
+THRESHOLD = 0.98  # the backtest score above which the state is red, unless the specification names one
+EDGES = (0.8, 0.9)  # displacement at the edge of the 10-90 interval and of the 5-95 interval: green up to the first, yellow up to the second
 
 
 def resolution(history: np.ndarray) -> float | None:
@@ -206,7 +210,7 @@ def resolution(history: np.ndarray) -> float | None:
     a value moves on a grid, and the smallest gap between two of its
     values is the grid's step — 0.0 when it takes one value only. A
     series that never repeats is continuous as far as its history
-    shows, and a tight corridor on it is earned, not noise: None."""
+    shows, and a narrow range on it is informative: None."""
     known = np.asarray(history, dtype=np.float64)
     known = known[np.isfinite(known)]
     distinct = np.unique(known)
@@ -215,64 +219,67 @@ def resolution(history: np.ndarray) -> float | None:
     return float(np.diff(distinct).min()) if distinct.size > 1 else 0.0
 
 
-def withheld(step: float | None, history: np.ndarray, corridor: float, median: float, actual: float) -> str | None:
-    """Why a walked point's PIT says nothing, or None. A corridor
-    narrower than the grid's step, with the actual inside a step of the
-    median, is the model's noise around a value the series takes
-    exactly; an actual further off than a step is a real move whatever
-    the corridor. A constant history whose actual equals it is the
-    same case at a step of zero."""
+def withheld(step: float | None, history: np.ndarray, range_width: float, median: float, actual: float) -> str | None:
+    """Why a backtested point's PIT is withheld, or None. A range
+    narrower than the series' resolution, with the actual within one
+    step of the median, is the model's noise around a value the series
+    takes exactly; an actual more than one step away is a real change
+    whatever the range. A constant history whose actual equals it is
+    the same case at a step of zero."""
     if step is None:
         return None
-    if step > 0.0 and corridor < step and abs(actual - median) <= step:
-        return f"corridor {corridor:.3e} is narrower than the series' resolution {step:.3e} and the actual sits within it"
+    if step > 0.0 and range_width < step and abs(actual - median) <= step:
+        return f"the range between the outer levels ({range_width:.3e}) is narrower than the series' resolution ({step:.3e}) and the actual is within one step of the median"
     if step == 0.0 and history.size and history[0] == actual:
-        return "the training series is constant and the actual equals it"
+        return "the history is constant and the actual equals it"
     return None
 
 
 def displacement(pit_value: float) -> float:
-    """How far a PIT sits from the median: 0 at the median, 0.8 at a
-    10-90 band's edge, 0.9 at a 5-95 band's, 1 outside the grid."""
+    """How far a PIT is from the median: 0 at the median, 0.8 at the
+    edge of the 10-90 interval, 0.9 at the edge of the 5-95 interval, 1
+    outside the grid."""
     return abs(2.0 * pit_value - 1.0)
 
 
-def verdict(displacements: list[float], threshold: float) -> tuple[float, str]:
-    """The walk's score and band over the newest point of every member
-    scored: the worst displacement raised to their number, since the
-    worst of k calibrated displacements lands under an edge e with
-    probability e to the k, so the edges keep their base rate at any
-    count. Nothing scored is 0.0, green."""
+def backtest_result(displacements: list[float], threshold: float) -> tuple[float, str]:
+    """The backtest's score and state over the newest point of every
+    member scored: the largest displacement raised to the power of
+    their number. The largest of k calibrated displacements is under an
+    edge e with probability e to the k, so the edges keep their base
+    rate at any count. With nothing scored the score is 0.0 and the
+    state green."""
     if not displacements:
         return 0.0, "green"
     score = float(max(displacements) ** len(displacements))
-    band = "green" if score <= EDGES[0] else "yellow" if score <= EDGES[1] else "orange" if score <= threshold else "red"
-    return score, band
+    state = "green" if score <= EDGES[0] else "yellow" if score <= EDGES[1] else "orange" if score <= threshold else "red"
+    return score, state
 
 
-def walk_basis(threshold: float) -> dict:
+def backtest_basis(threshold: float) -> dict:
+    """The `assumptions` entry for the backtest's result."""
     return {
         "field": "walk",
         "threshold": threshold,
-        "basis": f"assumed: the verdict reads the newest walked point of every member with a PIT, displacement |2·pit - 1| "
-        f"(0 at the median, {EDGES[0]} at the 10-90 band's edge, {EDGES[1]} at the 5-95 band's), the worst of k raised to k "
-        f"so the edges keep their base rate at any count; green to {EDGES[0]}, yellow to {EDGES[1]}, orange to the threshold "
-        f"{threshold}, red past it; a point whose PIT is withheld is not scored",
+        "basis": f"assumed: the result reads the newest backtested point of every member with a PIT, displacement |2·pit - 1| "
+        f"(0 at the median, {EDGES[0]} at the edge of the 10-90 interval, {EDGES[1]} at the edge of the 5-95 interval), the largest of k "
+        f"raised to the power k so the edges keep their base rate at any count; green up to {EDGES[0]}, yellow up to {EDGES[1]}, "
+        f"orange up to the threshold {threshold}, red above it; a point whose PIT is withheld is not scored",
     }
 
 
 def learned_width(lower, median, upper, actual, nominal: float = 0.80, prior: int = 30) -> float:
     """The width a dataset's intervals should be sent with, from the
-    dataset's record: per point of a past forecast, the interval's
-    `lower` and `upper` bound as served at `nominal` (0.1 and 0.9 for
-    the 80% interval), its `median`, and the `actual` value that landed.
-    It is the factor at which the record's intervals would have held
+    dataset's stored forecasts: per point of a past forecast, the
+    interval's `lower` and `upper` bound as served at `nominal` (0.1
+    and 0.9 for the 80% interval), its `median`, and the `actual`
+    value. It is the factor at which those intervals would have covered
     their nominal share of the actual values, found by search between
     a quarter and eight times, and shrunk toward 1 by `prior` points'
-    worth so that a short record moves it little. Learned per band of
-    distance (the next 3 periods, 4 to 6, 7 to 12), it is sent as one
+    worth so that a few points move it little. Learned per group of
+    steps (the next 3 periods, 4 to 6, 7 to 12), it is sent as one
     factor per period ahead. Points with a missing value are left out;
-    an empty record gives 1."""
+    with no points the width is 1."""
     lower, median, upper, actual = (np.asarray(v, dtype=np.float64).ravel() for v in (lower, median, upper, actual))
     known = ~(np.isnan(lower) | np.isnan(median) | np.isnan(upper) | np.isnan(actual))
     n = int(known.sum())
@@ -295,8 +302,8 @@ class Chronos2:
     """Loaded on first use, kept."""
 
     def __init__(self, device: str):
-        # On Metal it runs but slower than on the CPU at these sizes: 0.47 s against 0.12 s for a hundred series of sixty
-        # periods, a year ahead, on an M5 Pro (2026-10-01). A model this small pays more for the device than it gains.
+        # On Metal it runs slower than on the CPU at these sizes. Measured on an M5 Pro: 0.47 s against 0.12 s for a
+        # hundred series of sixty periods, a year ahead.
         self.device = "cpu" if device == "mps" else device
         self._pipeline = None
         self._lock = threading.Lock()
@@ -341,7 +348,7 @@ class Chronos2:
                 answered, _mean = self.pipeline().predict_quantiles(
                     inputs, prediction_length=horizon, quantile_levels=asked, batch_size=GROUP, cross_learning=True
                 )
-            except Exception as e:  # the package's own refusals, by their text: the series forecast with these fail, the others stand
+            except Exception as e:  # the package's own errors: the series of this group fail, the other groups are answered
                 if out_of_memory(e):
                     raise
                 for i in mine:

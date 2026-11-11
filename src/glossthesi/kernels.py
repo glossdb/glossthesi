@@ -30,7 +30,7 @@ CHECKPOINTS = {HUB_REPO: [REGRESSOR, CLASSIFIER], forecast.MODEL: forecast.REVIS
 
 
 class KernelError(Exception):
-    """A read the model refuses, with the reason the door reports."""
+    """A request the model cannot answer, with the reason the endpoint reports."""
 
 
 def fetch_checkpoints() -> None:
@@ -53,7 +53,8 @@ def pick_device() -> str:
 
 
 def _free_without_flushing(manager) -> float:
-    """What the package's probe answers, without what it does to get it.
+    """The free device memory the package asks for, read without the
+    flush the package does first.
 
     Before every forward pass (three times a pass: columns, rows, the
     ICL stack) the package sizes its batches from free device memory, and
@@ -68,7 +69,7 @@ def _free_without_flushing(manager) -> float:
     return (free + idle) / (1024 * 1024)
 
 
-def _probe_memory_cheaply() -> None:
+def _read_free_memory_without_flush() -> None:
     from tabicl._model.inference import InferenceManager
 
     flushing = InferenceManager.get_available_gpu_memory
@@ -81,8 +82,8 @@ def _probe_memory_cheaply() -> None:
     InferenceManager.get_available_gpu_memory = available
 
 
-if os.environ.get("GLOSSTHESI_FLUSHING_PROBE", "") != "1":  # the package's own, for a comparison
-    _probe_memory_cheaply()
+if os.environ.get("GLOSSTHESI_FLUSHING_PROBE", "") != "1":  # `1` keeps the package's own memory check, for a comparison
+    _read_free_memory_without_flush()
 
 
 class Kernels:
@@ -105,8 +106,9 @@ class Kernels:
         self.chronos = forecast.Chronos2(self.device)  # loads on first use, or at start (`load_forecaster`)
 
     def load_forecaster(self) -> None:
-        """Chronos-2's weights on the device now, so a start pays all of
-        its load at once and the port opening means the whole service."""
+        """Load Chronos-2's weights onto the device now, so that the
+        whole load happens at start and the open port means every model
+        is ready."""
         self.chronos.pipeline()
 
     def series(self, jobs: list, levels: list[float]) -> list[np.ndarray | Exception]:
@@ -140,7 +142,7 @@ class Kernels:
             done: dict[int, np.ndarray | Exception] = dict(read(everyone))
         except Exception as e:  # one series the pipeline refuses fails the lot: read them one by one, so that it fails alone
             if forecast.out_of_memory(e):
-                raise  # the device's memory, not a series: the owner's failure
+                raise  # the device's memory, not a series: the whole job fails
             done = {}
             for i in everyone:
                 try:

@@ -24,17 +24,17 @@ Every member is read on its own, and every target on its own.
   and the model moves it the same way. Both read the same history
   with the same features (the calendar and the inputs), so their
   agreement says the association holds under a linear and under a
-  flexible fit; it does not say the input causes the change. That the
+  flexible fit; it does not say the input causes the change. That
   nothing which set the input also moved the target is the caller's
   assumption, declared on every answer (`assumptions`).
 
-The route promises that direction and no size. The model's shift
+The endpoint answers the direction, not the size. The model's shift
 and the history's estimate are both returned; the model errs low
-more often than high, and on a lever that rarely moved in the
+more often than high, and on an input that rarely moved in the
 history it barely moves at all, so the history's estimate is the one
-to read there (against a physical truth, docs/whatif.md). Against
-that truth every sign stated was right and 3% of what the lever
-cannot touch got one (2026-10-17)."""
+to read there. Measured on a physical device with a known causal
+graph (`docs/whatif.md`): every sign stated was right, and 3% of the
+columns the changed input cannot affect got a sign."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ MEDIAN = 0.5
 
 
 class WhatifError(Exception):
-    """A read the what-if refuses for one member or target, with the reason the door reports."""
+    """A member or target the what-if cannot answer, with the reason the endpoint reports."""
 
 
 # -- reading the history ---------------------------------------------------------
@@ -75,7 +75,7 @@ def run_of_rows(grain: float) -> int:
     On a short history the run is cut to a tenth of it (`MIN_RUNS`), so
     that there are runs to draw: a run as long as the history gives the
     history back 300 times, an interval of no width, and any slope off
-    zero (found 2026-10-17 on a 5-minute table of 200 rows)."""
+    zero (a 5-minute table of 200 rows is such a case)."""
     return round(24 * 60 / grain) if grain < 24 * 60 else 14 if grain == 24 * 60 else 8 if grain <= 7 * 24 * 60 else 3
 
 
@@ -99,7 +99,7 @@ def design(stamps: np.ndarray, inputs: np.ndarray) -> np.ndarray:
 def rows_needed(stamps: np.ndarray, inputs: int, changed: int = 0) -> int:
     """The actual periods a member needs behind a prediction: `MIN_HISTORY`, or the columns the history's reading
     holds plus `EXTRA_ROWS` where that is more — 16 with two inputs on a monthly or weekly table, 22 on a daily, 45 on
-    an hourly — so that the door says so instead of the reading answering "too short". Each changed input adds a
+    an hourly — so that the endpoint reports the number instead of the reading answering "too short". Each changed input adds a
     column, its lag, and the lag costs the first `LAG` rows."""
     columns = design(stamps, np.zeros((len(stamps), inputs))).shape[1] + changed
     return max(MIN_HISTORY, columns + EXTRA_ROWS + (LAG if changed else 0))
@@ -222,8 +222,8 @@ def beyond_together(past: np.ndarray, ahead: np.ndarray) -> bool:
     does not see a combination the history never held (a promotion and
     a holiday that never fell together, a price never cut while the
     promotion was on). The reach is the distance within which 99 of
-    100 history rows find a neighbour (`REACH`): the loneliest row
-    alone set it before, so one mis-keyed row disarmed the check. A
+    100 history rows find a neighbour (`REACH`): a quantile, so that
+    one mistyped row does not widen it. A
     combination is beyond where more than a tenth of the periods ahead
     lie past the reach (`BEYOND_SHARE`): one odd period among thirteen
     does not fire it, two do; a plan drawn from the history itself
@@ -358,7 +358,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
             return say(f"{name(c)} never varied in this member's history")
         asked = member.scenario[c][~np.isnan(member.scenario[c])]
         if (asked > seen.max()).any() or (asked < seen.min()).any():
-            # Said apart: the input as planned may already lie where the history never was, before anything is changed.
+            # Reported separately: the input as planned may already lie outside the history's range, before anything is changed.
             planned = member.plan[c][~np.isnan(member.plan[c])]
             beyond = (planned > seen.max()).any() or (planned < seen.min()).any()
             what = ("the input as planned" if beyond else "the change") if one else (f"`{c}` as planned" if beyond else f"the change of `{c}`")
@@ -460,7 +460,7 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
 
 
 def _tied(member: Member, changed: str, read: list[str]) -> str:
-    """What an input that does not stand apart goes with: another input by name where one follows it closely, else the rest together."""
+    """What an input that cannot be told apart is correlated with: another input by name where one follows it closely, else the rest together."""
     x = member.inputs[changed]
     best, name = 0.0, ""
     for other in read:
@@ -493,17 +493,17 @@ def assumptions() -> list[dict]:
         {
             "field": "sign",
             "value": INTERVAL,
-            "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (agreed 2026-10-01, docs/whatif.md)",
+            "basis": "assumed: the interval of the history's slope that has to lie off zero, on the rows and on their changes (docs/whatif.md)",
         },
         {
             "field": "sign",
             "value": STILL,
-            "basis": "assumed: a shift under this share of what the history's regression leaves of the column (its residual spread; the column's own spread where no regression is read) counts as none. At the former threshold, a tenth of the column's whole spread, the model's shift stayed under it on 91% of 17,179 tested series where the history showed no effect; that measures the model's stillness at a threshold, not the threshold. At this one, on the development tables of 2026-10-17, it stayed under on 58% of 71: a shift the lenient threshold had passed as none is a move (docs/whatif.md)",
+            "basis": "assumed: a shift under this share of what the history's regression leaves of the column (its residual spread; the column's own spread where no regression is read) counts as none. Measured on the development tables: where the history showed no effect, the model's shift stayed under it on 58% of 71 series and columns (docs/whatif.md)",
         },
         {
             "field": "history_value",
             "value": LAG,
-            "basis": "assumed: each changed input's value this many periods before is held beside it in the history's reading (since 2026-10-17), so what the column does in the period after the input moves has its own slope, and a sustained change's effect is the sum of the two; the estimate for the first period ahead is the same-period slope's alone, the last history row being the same as planned and under the change. Where the lag's slope is off zero on both readings the reason says whether the effect carries into the period after or the column moves back then",
+            "basis": "assumed: each changed input's value this many periods before is held beside it in the history's reading, so what the column does in the period after the input moves has its own slope, and a sustained change's effect is the sum of the two; the estimate for the first period ahead is the same-period slope's alone, the last history row being the same as planned and under the change. Where the lag's slope is off zero on both readings the reason says whether the effect carries into the period after or the column moves back then",
         },
         {
             "field": "basis",
@@ -533,7 +533,7 @@ def assumptions() -> list[dict]:
         {
             "field": "basis",
             "value": REACH,
-            "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where it lies farther from every history row than the distance within which this share of history rows find a nearest neighbour, each input scaled by its spread in the history (before 2026-10-17 the loneliest row set the reach, and one mis-keyed row disarmed the check)",
+            "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where it lies farther from every history row than the distance within which this share of history rows find a nearest neighbour, each input scaled by its spread in the history; the reach is a quantile, so that one mistyped row does not widen it",
         },
         {
             "field": "basis",

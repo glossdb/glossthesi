@@ -1,13 +1,13 @@
-"""The wire: one table and a specification in, one table and an
-answer object out, in two encodings (`docs/contract.md`).
+"""The wire format: one table and a specification in, one table and
+an answer object out, in two encodings (`docs/contract.md`).
 
 An Arrow IPC stream carries the table with its column names and
 types, and the specification as JSON in the schema's metadata under
 `spec`; the answer goes back the same way, the answer object under
 `answer`. JSON carries the same table column by column beside the
 specification, a null where a value is missing, and the answer in
-the same shape. The answer is in the request's encoding; a refusal
-is always JSON.
+the same shape. The answer is in the request's encoding; an error
+response is JSON in both.
 
 The table's reserved columns are `member`, `period` and `status`.
 Every other column is a value: numbers read as float64 with a null
@@ -34,9 +34,9 @@ STATUSES = ("actual", "plan", "forecast", "scenario")
 
 
 class Refusal(Exception):
-    """A request the service will not serve: the reason, the status,
-    and for a specification that does not fit the table the fields an
-    agent has to repair."""
+    """An error response: the reason, the HTTP status, and for a
+    specification that does not fit the table the fields an agent has
+    to repair."""
 
     def __init__(self, message: str, status: int = 400, errors: list[dict] | None = None):
         super().__init__(message)
@@ -217,14 +217,15 @@ def status(table: pa.Table) -> np.ndarray:
     return got
 
 
-def by_member(table: pa.Table, route: str, twice: bool = False) -> tuple[pa.Table, list[tuple[str, int, int]]]:
+def by_member(table: pa.Table, path: str, twice: bool = False) -> tuple[pa.Table, list[tuple[str, int, int]]]:
     """The table with a member's rows together and in period order, and
-    per member its name and its rows as [start, end). A member has one
-    row per period, unless the route takes a period `twice` (the
-    what-if: as planned and under the scenario) and checks that itself."""
+    per member its name and its rows as [start, end). `path` names the
+    endpoint in an error. A member has one row per period, unless the
+    endpoint takes a period `twice` (the what-if: as planned and under
+    the scenario) and checks that itself."""
     for name in ("member", "period"):
         if name not in table.column_names:
-            raise Refusal(f"{route} needs a `{name}` column")
+            raise Refusal(f"{path} needs a `{name}` column")
     if pa.types.is_null(table.column("period").type):
         raise Refusal("`period` holds no values")
     if not is_category(table.schema.field("member")):

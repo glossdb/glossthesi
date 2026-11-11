@@ -1,4 +1,4 @@
-"""The kernels on the device: TabICL's forecaster over the weights
+"""The models on the device: TabICL's forecaster over the weights
 loaded once."""
 
 import numpy as np
@@ -27,5 +27,5 @@ def test_the_forecaster_reads_each_series_in_turn_and_moves_with_an_input(k):
     assert got[0].shape == got[1].shape == (4, 3) and (np.diff(got[0], axis=1) >= 0).all()
     # The model has seen y five higher wherever x was on, and predicts it so.
     assert 3.5 < (got[1][:, 1] - got[0][:, 1]).mean() < 6.5
-    # A series the pipeline refuses fails alone.
+    # A series the pipeline cannot read fails alone.
     assert isinstance(got[2], Exception)

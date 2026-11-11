@@ -1,12 +1,12 @@
-"""Timings at the reads' real shapes, on whatever device this process
-has: what one call costs. The bench for any host with a GPU that runs
-the container:
+"""Timings at the request shapes glossdb sends, on whatever device this
+process has: what one call costs. The benchmark for any host with a
+GPU that runs the container:
 
-    python -m glossthesi.measure                      # the reads' timings
+    python -m glossthesi.measure                      # the timings, as JSON
 
-The forecast and the walk are Chronos-2 through `forecast.py` at the
-shapes glossdb sends: the metrics of a workspace as one request, six
-walked periods each; a hundred series a year ahead."""
+The forecast and the backtest are Chronos-2 through `forecast.py`: the
+metrics of a workspace as one request, six backtested periods each; a
+hundred series a year ahead."""
 
 from __future__ import annotations
 
@@ -60,9 +60,9 @@ def run(use_amp: bool = False) -> dict:
     panel = 100.0 * (1 + rng.uniform(0, 5, size=(100, 1))) * (1 + 0.2 * np.sin(np.arange(60) / 12 * 2 * np.pi) + rng.normal(0, 0.05, size=(100, 60)))
     ahead = [Series(panel[i]) for i in range(100)]
     timed("forecast_100x60_to_12", lambda: k.chronos.forecast(ahead, 12, LEVELS, [3, 12]), n=2)
-    # The walk of a workspace: a hundred metrics, six origins each, one step ahead — six hundred series of one shape.
-    walked = [Series(panel[i, : 54 + j]) for j in range(6) for i in range(100)]
-    timed("walk_100x6_origins", lambda: k.chronos.forecast(walked, 1, LEVELS), n=2)
+    # The backtest of a workspace: a hundred metrics, six origins each, one step ahead — six hundred series of one shape.
+    backtested = [Series(panel[i, : 54 + j]) for j in range(6) for i in range(100)]
+    timed("backtest_100x6_origins", lambda: k.chronos.forecast(backtested, 1, LEVELS), n=2)
     return out
 
 
@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ap = argparse.ArgumentParser(prog="python -m glossthesi.measure", description=__doc__.split("\n\n")[0])
     ap.add_argument("--amp", action="store_true", help="reduced precision (autocast)")
-    ap.add_argument("--flushing-probe", action="store_true", help="keep the package's own memory probe")
+    ap.add_argument("--flushing-probe", action="store_true", help="keep the package's own memory check, with its flush")
     args = ap.parse_args(argv)
     os.environ["GLOSSTHESI_FLUSHING_PROBE"] = "1" if args.flushing_probe else ""
     print(json.dumps(run(use_amp=args.amp), indent=1))
