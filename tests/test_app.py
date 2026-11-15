@@ -188,41 +188,55 @@ def test_a_forecast_answers_every_member_with_its_periods_and_its_totals(client)
     assert narrowest[1] == pytest.approx(25.5) and narrowest[2] - narrowest[1] < values[2] - values[1]
 
 
-def test_the_answer_carries_the_coverage_of_its_intervals(client, monkeypatch):
-    # One interval from the levels asked (0.1 to 0.9), at each of the three steps and at the span: the
-    # held-out table's own numbers for months.
-    got = client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]["coverage"]
-    steps, spans = [e for e in got if e["span"] is None], [e for e in got if e["span"] is not None]
-    assert [e["step"] for e in steps] == [1, 2, 3] and [(e["step"], e["span"]) for e in spans] == [(3, 3)]
-    assert all(e["low"] == 0.1 and e["high"] == 0.9 for e in got)
-    assert [(e["share"], e["se"], e["points"]) for e in steps] == [(row[0], row[1], row[4]) for row in coverage.HELD["month"]["steps"][:3]]
-    assert (spans[0]["share"], spans[0]["se"], spans[0]["points"]) == tuple(coverage.HELD["month"]["spans"][2][i] for i in (0, 1, 4))
-    assert all(
-        e["datasets"] == coverage.DATASETS["month"] == 4 and 0 < e["se"] < 0.1 for e in got
-    )  # the standard error and the datasets pooled come with every share
-    # Both intervals where both pairs of levels are asked, the 90% one from the second share.
-    both = client.send("/forecast", SPEC | {"levels": [0.05, 0.1, 0.5, 0.9, 0.95], "totals": []}, _table(a=HISTORY)).json()["answer"]["coverage"]
-    assert [(e["step"], e["low"], e["high"]) for e in both] == [(s, lo, hi) for s in (1, 2, 3) for lo, hi in ((0.1, 0.9), (0.05, 0.95))]
-    assert (both[1]["share"], both[1]["se"]) == coverage.HELD["month"]["steps"][0][2:4]
-    # An interval the levels do not form has no entry; a step past the table has none; another grain reads its own rows.
-    assert client.send("/forecast", SPEC | {"levels": [0.2, 0.8]}, _table(a=HISTORY)).json()["answer"]["coverage"] == []
-    far = client.send("/forecast", SPEC | {"horizon": 24, "totals": []}, _table(a=LONG)).json()["answer"]["coverage"]
-    assert [e["step"] for e in far] == list(range(1, 13))
-    weekly = client.send("/forecast", SPEC | {"grain": "week"}, _table(a=HISTORY)).json()["answer"]["coverage"]
-    assert weekly[0]["share"] == coverage.HELD["week"]["steps"][0][0] and weekly[-1]["span"] == 3
-    # A backtest one step ahead carries the first step's share.
-    backtest = client.send("/forecast", {"targets": ["y"], "origins": 2, "levels": [0.1, 0.5, 0.9]}, _table(a=LONG)).json()["answer"]["coverage"]
-    assert [(e["step"], e["span"]) for e in backtest] == [(1, None)]
+COVERED = ("coverage_80", "coverage_80_se", "coverage_90", "coverage_90_se", "coverage_points", "coverage_datasets")
+
+
+def _covered(answer):
+    """Per point of the answer's table, in order: its step and span and the coverage it carries, which is the same on
+    every level row of the point."""
+    seen = []
+    for row in _rows(answer):
+        point = (row["member"], row["origin"], row["step"], row["span"])
+        got = tuple(row[c] for c in COVERED)
+        if seen and seen[-1][0] == point:
+            assert seen[-1][1] == got
+            continue
+        seen.append((point, got))
+    return [(point[2], point[3], *got) for point, got in seen]
+
+
+def test_every_point_row_carries_the_coverage_of_its_step_or_span(client, monkeypatch):
+    # The 80% interval from the levels asked (0.1 to 0.9), at each of the three steps and at the span: the held-out
+    # table's own numbers for months, with its standard error, the points and the datasets behind it. The levels do not
+    # form the 90% interval, so its columns are null.
+    got = _covered(client.send("/forecast", SPEC, _table(a=HISTORY)).json())
+    month = coverage.HELD["month"]
+    assert got == [(s, None, month["steps"][s - 1][0], month["steps"][s - 1][1], None, None, month["steps"][s - 1][4], 4) for s in (1, 2, 3)] + [
+        (3, 3, month["spans"][2][0], month["spans"][2][1], None, None, month["spans"][2][4], 4)
+    ]
+    assert coverage.DATASETS["month"] == 4
+    # Both intervals where both pairs of levels are asked.
+    both = _covered(client.send("/forecast", SPEC | {"levels": [0.05, 0.1, 0.5, 0.9, 0.95], "totals": []}, _table(a=HISTORY)).json())
+    assert both[0] == (1, None, *month["steps"][0][:4], month["steps"][0][4], 4)
+    # No interval the levels form: every coverage column is null, and the coverage table's basis is not in `assumptions`.
+    none = client.send("/forecast", SPEC | {"levels": [0.2, 0.8], "totals": []}, _table(a=HISTORY)).json()
+    assert {g[2:] for g in _covered(none)} == {(None,) * 6} and "assumptions" not in none["answer"]
+    # A step past the table has none; another grain reads its own rows.
+    far = _covered(client.send("/forecast", SPEC | {"horizon": 24, "totals": []}, _table(a=LONG)).json())
+    assert [g[0] for g in far if g[2] is not None] == list(range(1, 13)) and all(g[2:] == (None,) * 6 for g in far[12:])
+    weekly = _covered(client.send("/forecast", SPEC | {"grain": "week"}, _table(a=HISTORY)).json())
+    assert weekly[0][2] == coverage.HELD["week"]["steps"][0][0] and weekly[-1][:2] == (3, 3) and weekly[-1][-1] == coverage.DATASETS["week"]
+    # A backtest one step ahead carries the first step's share on every point.
+    backtest = _covered(client.send("/forecast", {"targets": ["y"], "origins": 2, "levels": [0.1, 0.5, 0.9]}, _table(a=LONG)).json())
+    assert {g[:3] for g in backtest} == {(1, None, month["steps"][0][0])}
     # A span's share was measured at its grain's dependence: a grain that combines with another value
     # serves its steps and no spans until the table is measured again.
-    daily = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
-    assert len(daily) == 3 + (1 if forecast.DEPENDENCE["day"] == coverage.MEASURED_AT["day"] else 0)
     monkeypatch.setitem(forecast.DEPENDENCE, "day", coverage.MEASURED_AT["day"] + 0.1)
-    moved = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
-    assert [e["span"] for e in moved] == [None, None, None]
+    moved = _covered(client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json())
+    assert [g[2] is not None for g in moved] == [True, True, True, False]
     monkeypatch.setitem(forecast.DEPENDENCE, "day", coverage.MEASURED_AT["day"])
-    measured = client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json()["answer"]["coverage"]
-    assert [e["span"] for e in measured] == [None, None, None, 3] and measured[-1]["share"] == coverage.HELD["day"]["spans"][2][0]
+    measured = _covered(client.send("/forecast", SPEC | {"grain": "day", "totals": [3]}, _table(a=HISTORY)).json())
+    assert measured[-1][:3] == (3, 3, coverage.HELD["day"]["spans"][2][0])
 
 
 def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(client):
@@ -237,7 +251,9 @@ def test_a_column_that_fails_alone_names_its_origin_in_the_tables_own_type(clien
     assert (
         pa.types.is_timestamp(back.schema.field("origin").type) and back.num_rows == 36
     )  # three columns answered, each 3 steps by 3 levels and the total of 3
-    assert _where(json.loads(back.schema.metadata[b"answer"])["errors"]) == [{"member": "b", "origin": "2024-08-01T00:00:00", "column": "orders"}]
+    assert _where(json.loads(back.schema.metadata[b"answer"])["errors"]) == [
+        {"member": "b", "origin": "2024-08-01T00:00:00", "column": "orders", "code": "history_short", "needed": 6, "given": 2}
+    ]
     assert wire.clean({"a": datetime.date(2024, 8, 1), "b": np.datetime64("2024-08"), "c": [datetime.datetime(2024, 8, 1, 12, 30)]}) == {
         "a": "2024-08-01",
         "b": "2024-08",
@@ -255,7 +271,6 @@ def test_the_arrow_encoding_answers_the_same_as_json(client):
         "service": "glossthesi",
         "version": "dev",
         "errors": [],
-        "coverage": coverage.held("month", 3, [3], SPEC["levels"]),
         "assumptions": [coverage.basis("month"), forecast.dependence("month")],
     }
     assert back.schema.field("origin").type == pa.int64() and back.schema.field("period").type == pa.int64()
@@ -268,11 +283,11 @@ def test_the_arrow_encoding_answers_the_same_as_json(client):
     with pa.ipc.new_stream(out, t.schema) as writer:
         writer.write_table(t)
     r = client.post("/forecast", content=out.getvalue(), headers={"content-type": wire.ARROW})
-    assert r.status_code == 400 and set(r.json()) == {"error"}
+    assert r.status_code == 400 and r.json()["code"] == "spec_missing"
     r = client.post("/forecast", content=b"not a stream", headers={"content-type": wire.ARROW})
-    assert r.status_code == 400 and set(r.json()) == {"error"}
+    assert r.status_code == 400 and r.json()["code"] == "body_unreadable"
     r = client.post("/forecast", content=b"x", headers={"content-type": "text/plain"})
-    assert r.status_code == 400 and set(r.json()) == {"error"}
+    assert r.status_code == 400 and r.json()["code"] == "content_type"
 
 
 def test_several_targets_are_answered_per_column_and_a_short_one_fails_alone(client):
@@ -284,11 +299,12 @@ def test_several_targets_are_answered_per_column_and_a_short_one_fails_alone(cli
     assert [row["value"] for row in _rows(got, member="a", column="orders", span=3)][1] == pytest.approx(10.5)
     assert [row["value"] for row in _rows(got, member="b", column="sales", span=None)] == pytest.approx([8.1, 8.5, 8.9] * 3)
     assert _rows(got, member="b", column="orders") == []
-    assert _where(got["answer"]["errors"]) == [{"member": "b", "origin": 8, "column": "orders"}]
+    assert _where(got["answer"]["errors"]) == [{"member": "b", "origin": 8, "column": "orders", "code": "history_short", "needed": 6, "given": 2}]
     assert kernels.get().chronos.groups == [(2, forecast.GROUP, True)]  # both members have two columns: one group
     # No column with enough history fails the member.
     r = client.send("/forecast", spec | {"horizon": 2, "totals": []}, _table(a={"sales": [None] * 8, "orders": [None] * 8}))
-    assert r.status_code == 200 and r.json()["table"]["member"] == [] and _where(r.json()["answer"]["errors"]) == [{"member": "a", "origin": 8}]
+    assert r.status_code == 200 and r.json()["table"]["member"] == []
+    assert _where(r.json()["answer"]["errors"]) == [{"member": "a", "origin": 8, "code": "history_short", "needed": 6, "given": 0}]
 
 
 def test_a_width_stretches_the_intervals_around_the_median(client):
@@ -386,7 +402,7 @@ def test_a_member_that_cannot_be_forecast_fails_alone(client):
     assert r.status_code == 200, r.text
     got = r.json()
     assert [row["value"] for row in _rows(got, member="a")] == [8.5, 8.5] and _rows(got, member="short") == []
-    assert _where(got["answer"]["errors"]) == [{"member": "short", "origin": 3, "column": "y"}]
+    assert _where(got["answer"]["errors"]) == [{"member": "short", "origin": 3, "column": "y", "code": "history_short", "needed": 6, "given": 2}]
     # An error of the model itself fails the members forecast with it, and no others. The model's own text reaches the caller.
     table = _table(bad=[-1] * 8, a=HISTORY, c={"y": HISTORY, "promotion": [0] * 8})
     table["member"] += ["c", "c"]
@@ -398,7 +414,7 @@ def test_a_member_that_cannot_be_forecast_fails_alone(client):
     got = r.json()
     assert (
         r.status_code == 200
-        and {e["member"] for e in got["answer"]["errors"]} == {"bad", "a"}
+        and {(e["member"], e["code"]) for e in got["answer"]["errors"]} == {("bad", "model_failed"), ("a", "model_failed")}
         and all("a value under zero" in e["error"] for e in got["answer"]["errors"])
     )
     assert [row["value"] for row in _rows(got, member="c")] == [9.5, 9.5]
@@ -422,13 +438,18 @@ def test_a_backtest_forecasts_the_last_periods_from_the_history_before_them_and_
     # Origins named: the same, from the periods asked; one that is no period is an error.
     r = client.send("/forecast", spec | {"origins": [8, 11, 99]}, _table(a=LONG))
     got = r.json()
-    assert [row["origin"] for row in _rows(got)[::3]] == [8, 11] and _where(got["answer"]["errors"]) == [{"member": "a", "origin": 99}]
+    assert [row["origin"] for row in _rows(got)[::3]] == [8, 11] and _where(got["answer"]["errors"]) == [
+        {"member": "a", "origin": 99, "code": "origin_unknown"}
+    ]
     # Too short a history for the backtest asked: the origins it has are backtested, and the answer lists the others.
     r = client.send("/forecast", spec | {"origins": 6}, _table(a=[1, 2, 3, 4, 5, 6, 7]))
     got = r.json()
-    assert [row["origin"] for row in _rows(got)[::3]] == [6] and len(got["answer"]["errors"]) == 5  # the five earlier origins have under six known values
+    # The five earlier origins have under six known values: each names the values it needs and has.
+    assert [row["origin"] for row in _rows(got)[::3]] == [6]
+    assert [(e["origin"], e["code"], e["needed"], e["given"]) for e in got["answer"]["errors"]] == [(o, "history_short", 6, o) for o in range(1, 6)]
     r = client.send("/forecast", spec | {"origins": 9}, _table(a=HISTORY))
-    assert _where(r.json()["answer"]["errors"])[0] == {"member": "a"}  # the member as a whole: fewer origins than asked
+    # The member as a whole: fewer origins than asked, with the actual periods needed and given.
+    assert _where(r.json()["answer"]["errors"])[0] == {"member": "a", "code": "origins_short", "needed": 10, "given": 8}
     # A backtest three steps ahead: the actual and the PIT where the table holds the period's actual, none where it does not.
     r = client.send("/forecast", spec | {"origins": [10], "horizon": 3, "totals": [2]}, _table(a=LONG))
     got = r.json()
@@ -456,76 +477,104 @@ def test_a_backtest_answers_its_result_and_withholds_a_pit_below_the_series_reso
     assert [(row["pit"], row["withheld"] is None) for row in f[::3]] == [(None, False), (None, False), (0.5, True)]
     assert f[0]["withheld"] == f[3]["withheld"] != g[0]["withheld"]
     assert all(row["withheld"] is None for row in _rows(got, member="a"))
-    # The result: per member the shares inside the 80% and the 90% interval over the points with a PIT, and the newest
-    # point; one score over the newest points scored.
+    # Every point with a PIT carries its displacement |2·pit - 1|, the same on every level row; a withheld PIT has none.
+    assert [row["displacement"] for row in _rows(got, member="a")] == [1.0] * 9
+    assert [row["displacement"] for row in f[::3]] == [None, None, 0.0] and [row["displacement"] for row in g[::3]] == [None, 1.0, None]
+    # The result, per member: the shares inside the 80% and the 90% interval over the points with a PIT, the newest
+    # period backtested, and that point's score and state. Two newest points are scored (a's and flat's), so each
+    # displacement is raised to the power 2; grid's newest PIT is withheld, and it is green.
     result = got["answer"]["backtest"]
-    assert [(m["member"], m["backtested"], m["held_80"], m["held_90"]) for m in result["members"]] == [
-        ("a", 3, 0.0, 0.0),
-        ("flat", 3, 1.0, 1.0),
-        ("grid", 3, 0.0, 0.0),
-    ]
-    assert [m["newest"] for m in result["members"]] == [
-        {"origin": 11, "period": 12, "pit": 1.0, "displacement": 1.0, "withheld": None},
-        {"origin": 11, "period": 12, "pit": 0.5, "displacement": 0.0, "withheld": None},
-        {"origin": 11, "period": 12, "pit": None, "displacement": None, "withheld": g[0]["withheld"]},
-    ]
-    # Two members scored, the largest displacement 1.0: 1.0 squared is above the default threshold.
-    assert (result["score"], result["state"], result["threshold"]) == (1.0, "red", 0.98)
+    assert result == {
+        "threshold": 0.98,
+        "members": [
+            {"member": "a", "column": "y", "backtested": 3, "held_80": 0.0, "held_90": 0.0, "period": 12, "score": 1.0, "state": "red"},
+            {"member": "flat", "column": "y", "backtested": 3, "held_80": 1.0, "held_90": 1.0, "period": 12, "score": 0.0, "state": "green"},
+            {"member": "grid", "column": "y", "backtested": 3, "held_80": 0.0, "held_90": 0.0, "period": 12, "score": 0.0, "state": "green"},
+        ],
+    }
     assert any(a["field"] == "backtest" and a["threshold"] == 0.98 for a in got["answer"]["assumptions"])
-    # A threshold of 1 makes the same score orange; a series whose actual equals its median scores green by itself.
-    assert client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["backtest"]["state"] == "orange"
-    alone = client.send("/forecast", spec, _table(flat=[10] * 11 + [10.5])).json()["answer"]["backtest"]
-    assert (alone["score"], alone["state"]) == (0.0, "green")
+    # A threshold of 1 makes the same score orange.
+    assert [m["state"] for m in client.send("/forecast", spec | {"threshold": 1.0}, _table(a=LONG)).json()["answer"]["backtest"]["members"]] == ["orange"]
     # A forecast without `origins` carries no backtest result.
     assert "backtest" not in client.send("/forecast", SPEC, _table(a=HISTORY)).json()["answer"]
 
 
+def test_a_members_state_reads_its_displacement_at_the_power_of_the_members_scored_and_the_threshold_sent(client):
+    # The fake's quantiles are last + level: an actual 0.97 above the last value has a PIT of 0.97, a displacement of 0.94.
+    spec = {"targets": ["y"], "origins": 1, "levels": [0.1, 0.5, 0.9]}
+    edge = [1, 2, 3, 4, 5, 6, 7, 8.0, 8.97]
+    alone = client.send("/forecast", spec, _table(a=edge)).json()["answer"]["backtest"]
+    assert [(m["score"], m["state"]) for m in alone["members"]] == [(pytest.approx(0.94), "orange")]
+    # The threshold sent sets the state: 0.94 is above a threshold of 0.93, and red.
+    lower = client.send("/forecast", spec | {"threshold": 0.93}, _table(a=edge)).json()["answer"]["backtest"]
+    assert lower["threshold"] == 0.93 and [m["state"] for m in lower["members"]] == ["red"]
+    assert any(
+        a["field"] == "backtest" and a["threshold"] == 0.93
+        for a in client.send("/forecast", spec | {"threshold": 0.93}, _table(a=edge)).json()["answer"]["assumptions"]
+    )
+    # Two members at the same displacement: each at 0.94 squared, 0.8836, yellow under either threshold; the dataset's state
+    # is the worst member's, so it is yellow too and not red.
+    two = client.send("/forecast", spec | {"threshold": 0.93}, _table(a=edge, b=edge)).json()["answer"]["backtest"]["members"]
+    assert [(m["score"], m["state"]) for m in two] == [(pytest.approx(0.94**2), "yellow")] * 2
+    # The rule at the numbers of the audit: 0.985 alone is red under 0.98, two at 0.985 are orange; the threshold applies.
+    assert forecast.member_result(0.985, 1, 0.98) == (0.985, "red")
+    assert forecast.member_result(0.985, 2, 0.98) == (pytest.approx(0.985**2), "orange")
+    assert forecast.member_result(0.985, 2, 0.95) == (pytest.approx(0.985**2), "red")
+    assert forecast.member_result(None, 2, 0.98) == (0.0, "green") and forecast.member_result(0.5, 0, 0.98) == (0.0, "green")
+
+
 def test_forecast_error_responses(client):
     base = _table(a=HISTORY)
-    for change in (
-        {"targets": []}, {"targets": ["z"]}, {"targets": ["y", "y"]}, {"horizon": 0}, {"horizon": 2.5},
-        {"levels": [1.0]}, {"levels": [0.005, 0.5]}, {"totals": [4]}, {"grain": "fortnight"}, {"width": 0}, {"width": "wide"},
-        {"width": [1, None, 1]}, {"origins": 0}, {"origins": []}, {"threshold": 2}, {"threshold": True},
+    for change, code in (
+        ({"targets": []}, "targets_invalid"), ({"targets": ["z"]}, "target_unknown"), ({"targets": ["y", "y"]}, "target_twice"),
+        ({"horizon": 0}, "horizon_invalid"), ({"horizon": 2.5}, "horizon_invalid"), ({"levels": [1.0]}, "level_outside_grid"),
+        ({"levels": [0.005, 0.5]}, "level_outside_grid"), ({"levels": []}, "levels_invalid"), ({"totals": [4]}, "totals_invalid"),
+        ({"grain": "fortnight"}, "grain_unsupported"), ({"width": 0}, "width_invalid"), ({"width": "wide"}, "width_invalid"),
+        ({"width": [1, None, 1]}, "width_invalid"), ({"origins": 0}, "origins_invalid"), ({"origins": []}, "origins_invalid"),
+        ({"threshold": 2}, "threshold_invalid"), ({"threshold": True}, "threshold_invalid"),
     ):  # fmt: skip
         r = client.send("/forecast", SPEC | change, base)
         assert r.status_code == 400, (change, r.text)
-        # An error in the specification names the field at fault, for an agent to repair.
-        assert [e["field"] for e in r.json()["errors"]] == [next(iter(change))] and r.json()["errors"][0]["error"] == r.json()["error"]
+        # An error in the specification names the field at fault and its code, for an agent to repair.
+        assert r.json()["code"] == code and [(e["field"], e["code"]) for e in r.json()["errors"]] == [(next(iter(change)), code)], (change, r.text)
+        assert r.json()["errors"][0]["error"] == r.json()["error"]
+    assert client.send("/forecast", {"targets": ["y"], "levels": [0.5]}, base).json()["code"] == "horizon_invalid"
     # The model's own grid runs from 0.01 to 0.99: a level at its edge is answered, one outside gets the 400 above.
     assert client.send("/forecast", SPEC | {"levels": [0.01, 0.5, 0.99]}, base).status_code == 200
     # A table of the wrong shape: no member, no period, a period twice, a text target, an unknown status, a plan row
     # inside the history, a missing period, a missing member.
-    for table in (
-        {"period": PERIODS[:8], "y": HISTORY},
-        {"member": ["a"] * 8, "y": HISTORY},
-        {"member": ["a"] * 8, "period": [1, 1, 2, 3, 4, 5, 6, 7], "y": HISTORY},
-        {"member": ["a"] * 8, "period": PERIODS[:8], "y": ["x"] * 8},
-        {"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual"] * 7 + ["done"]},
-        {"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual", "plan"] + ["actual"] * 6},
-        {"member": ["a"] * 8, "period": [None, *PERIODS[1:8]], "y": HISTORY},
-        {"member": ["a", None] + ["a"] * 6, "period": PERIODS[:8], "y": HISTORY},
+    for table, code in (
+        ({"period": PERIODS[:8], "y": HISTORY}, "column_missing"),
+        ({"member": ["a"] * 8, "y": HISTORY}, "column_missing"),
+        ({"member": ["a"] * 8, "period": [1, 1, 2, 3, 4, 5, 6, 7], "y": HISTORY}, "period_twice"),
+        ({"member": ["a"] * 8, "period": PERIODS[:8], "y": ["x"] * 8}, "target_text"),
+        ({"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual"] * 7 + ["done"]}, "status_unknown"),
+        ({"member": ["a"] * 8, "period": PERIODS[:8], "y": HISTORY, "status": ["actual", "plan"] + ["actual"] * 6}, "status_order"),
+        ({"member": ["a"] * 8, "period": [None, *PERIODS[1:8]], "y": HISTORY}, "period_missing"),
+        ({"member": ["a", None] + ["a"] * 6, "period": PERIODS[:8], "y": HISTORY}, "member_missing"),
     ):
         r = client.send("/forecast", SPEC, table)
-        assert r.status_code == 400 and isinstance(r.json()["error"], str), (table, r.text)
+        assert r.status_code == 400 and r.json()["code"] == code, (table, r.text)
     # A body of the wrong shape: no table, a column of mixed kinds, columns of different lengths, no specification, no object.
-    for body in (
-        {"spec": SPEC},
-        {"spec": SPEC, "table": {"y": [1, "a"]}},
-        {"spec": SPEC, "table": {"y": [1], "member": []}},
-        {"table": base},
-        [1],
+    for body, code in (
+        ({"spec": SPEC}, "table_unreadable"),
+        ({"spec": SPEC, "table": {"y": [1, "a"]}}, "table_unreadable"),
+        ({"spec": SPEC, "table": {"y": [1], "member": []}}, "table_unreadable"),
+        ({"table": base}, "spec_missing"),
+        ({"spec": [1], "table": base}, "spec_unreadable"),
+        ([1], "body_unreadable"),
     ):
         r = client.post("/forecast", json=body)
-        assert r.status_code == 400 and isinstance(r.json()["error"], str), (body, r.text)
+        assert r.status_code == 400 and r.json()["code"] == code, (body, r.text)
     r = client.post("/forecast", content=b"not json", headers={"content-type": "application/json"})
-    assert r.status_code == 400
+    assert r.status_code == 400 and r.json()["code"] == "body_unreadable"
 
 
 def test_keys_authenticate_when_set(client, monkeypatch):
     monkeypatch.delenv("GLOSSTHESI_INSECURE_OPEN")
     monkeypatch.setenv("GLOSSTHESI_KEYS", "k1, k2")
     assert _request(client).status_code == 401
-    assert _request(client, headers={"authorization": "Bearer nope"}).status_code == 401
+    assert _request(client, headers={"authorization": "Bearer nope"}).json()["code"] == "unauthorized"
     assert _request(client, headers={"authorization": "Bearer k2"}).status_code == 200
 
 
@@ -591,7 +640,7 @@ def test_a_failure_is_a_500_as_json_and_a_log_line(client, monkeypatch, capsys):
     telemetry.configure("test")
     monkeypatch.setattr(app_module.Forecast, "parse", staticmethod(lambda table, spec: 1 / 0))
     r = _request(client)
-    assert r.status_code == 500 and set(r.json()) == {"error"} and "ZeroDivisionError" in r.json()["error"] and "Traceback" not in r.text
+    assert r.status_code == 500 and r.json()["code"] == "failed" and "ZeroDivisionError" in r.json()["error"] and "Traceback" not in r.text
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
     failed = next(line for line in lines if line["event"] == "request_failed")
     assert failed["severity"] == "ERROR" and failed["route"] == "/forecast" and "ZeroDivisionError" in failed["traceback"]
@@ -603,7 +652,7 @@ def test_a_draining_instance_sends_requests_back_to_retry(client, monkeypatch):
     monkeypatch.setattr(app_module, "DRAINING", type(app_module.DRAINING)())
     app_module.DRAINING.set()
     r = _request(client)
-    assert r.status_code == 503 and r.headers["retry-after"] == "2" and set(r.json()) == {"error"}
+    assert r.status_code == 503 and r.headers["retry-after"] == "2" and r.json()["code"] == "draining"
     assert client.get("/healthz").status_code == 200
 
 
@@ -664,13 +713,14 @@ def test_a_full_queue_answers_429_with_retry_after(client, monkeypatch):
 
     monkeypatch.setattr(app_module, "_OWNER", Full())
     r = _request(client)
-    assert r.status_code == 429 and r.headers["retry-after"] == "7" and set(r.json()) == {"error"}
+    assert r.status_code == 429 and r.headers["retry-after"] == "7" and r.json()["code"] == "busy"
 
 
 def test_a_body_over_the_cap_gets_a_413_before_it_is_parsed(client, monkeypatch):
     monkeypatch.setattr(app_module, "MAX_BODY_MB", 0)
     monkeypatch.setattr(app_module.wire, "parse", lambda *_a, **_k: 1 / 0)
-    assert _request(client).status_code == 413
+    r = _request(client)
+    assert r.status_code == 413 and r.json()["code"] == "too_large"
 
 
 def test_the_pit_reads_the_actual_against_the_models_own_grid():
@@ -728,7 +778,10 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     assert r.status_code == 200, r.text
     answer = r.json()
     assert answer["answer"]["errors"] == [] and answer["answer"]["changed"] == ["x"]
-    assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low", "history_value"}
+    assert {a["field"] for a in answer["answer"]["assumptions"]} == {"sign", "basis", "history_low", "history_value", "coverage"}
+    # No interval of the what-if has a stated coverage, said as such; the forecast's coverage columns are not on its rows.
+    assert [a["value"] for a in answer["answer"]["assumptions"] if a["field"] == "coverage"] == [None]
+    assert not any(name.startswith("coverage") for name in answer["table"]) and "coverage" not in answer["answer"]
     assert any(a["value"] == "no confounding" for a in answer["answer"]["assumptions"])  # the caller's assumption, declared on every answer
     # Three kinds of rows per member and period, each at the levels asked: held back, as planned, under the scenario.
     assert len(_rows(answer, member="a")) == 3 * 4 * 3
@@ -736,8 +789,15 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     assert [row["period"] for row in held] == _weeks(60)[-4:] and all(row["actual"] is not None and row["history_value"] is None for row in held)
     # The input moves y by 2 in this member's history, and the model moves it the same way: the sign is stated.
     plan, scenario = _rows(answer, member="a", status="plan", level=0.5), _rows(answer, member="a", status="scenario", level=0.5)
-    assert {row["sign"] for row in scenario} == {"+"} and scenario[0]["confidence"] == "direction" and scenario[0]["basis"]
+    assert {row["sign"] for row in scenario} == {"+"} and scenario[0]["basis"]
     assert all(abs((s["value"] - p["value"]) - 2.0) < 1e-9 for s, p in zip(scenario, plan))
+    # The effect per period: the scenario's median minus the plan's, on every level row of a scenario point and on no other row.
+    assert all(
+        row["effect"] == pytest.approx(s["value"] - p["value"])
+        for s, p in zip(scenario, plan)
+        for row in _rows(answer, member="a", status="scenario", period=s["period"])
+    )
+    assert all(row["effect"] is None for row in _rows(answer) if row["status"] != "scenario")
     # Beside the model's value, the history's own estimate of the scenario with its interval: the plan plus the history's estimate of the change.
     assert all(
         abs(s["history_value"] - p["value"] - 2.0) < 0.3 and s["history_low"] < s["history_value"] < s["history_high"] and p["history_value"] is None
@@ -748,11 +808,7 @@ def test_a_whatif_states_the_sign_where_the_history_and_the_model_agree(client):
     assert 0.2 < scenario[0]["history_error"] < 0.45 and held[0]["history_error"] == scenario[0]["history_error"]
     # A member whose history shows nothing, and the model moves nothing: no effect visible, which is not "no effect".
     still = _rows(answer, member="b", status="scenario", level=0.5)
-    assert (
-        {row["sign"] for row in still} == {"0"}
-        and still[0]["confidence"] == "no effect visible"
-        and still[0]["history_low"] < still[0]["value"] < still[0]["history_high"]
-    )
+    assert {row["sign"] for row in still} == {"0"} and still[0]["history_low"] < still[0]["value"] < still[0]["history_high"]
 
 
 def test_a_whatif_states_no_sign_where_it_cannot_answer(client, monkeypatch):
@@ -762,7 +818,7 @@ def test_a_whatif_states_no_sign_where_it_cannot_answer(client, monkeypatch):
     # The model moves the column against what the history shows: no sign, with the history's estimate beside it.
     monkeypatch.setattr(Fake, "effect", -2.0)
     against = first(_scenario(a=(50.0, 2.0)))
-    assert against["sign"] == "?" and against["confidence"] == "not answerable" and against["history_value"] is not None
+    assert against["sign"] == "?" and against["history_value"] is not None
     monkeypatch.setattr(Fake, "effect", 2.0)
     # A change beyond what the history holds: the history's x lay between 0 and 1. The history is not read.
     table = _scenario(a=(50.0, 2.0))
@@ -791,8 +847,8 @@ def test_a_member_or_a_target_that_cannot_be_read_fails_alone(client):
     r = client.send("/whatif", WHATIF, table)
     assert r.status_code == 200, r.text
     errors = r.json()["answer"]["errors"]
-    assert {"member": "short"} in _where(errors)  # 15 actual periods, under the 26 and 4 ahead it needs
-    assert {"member": "under", "column": "y"} in _where(errors)  # the model's own error for this series
+    assert {"member": "short", "code": "history_short", "needed": 30, "given": 15} in _where(errors)  # 15 actual periods, under the 26 and 4 ahead it needs
+    assert {"member": "under", "column": "y", "code": "model_failed"} in _where(errors)
     assert {row["member"] for row in _rows(r.json())} == {"a"}
 
 
@@ -805,7 +861,8 @@ def test_a_member_too_short_for_its_grain_fails_alone(client):
              "y": [50.0 + (i % 5) for i in range(40)] + [None] * 4, "x": [float(i % 2) for i in range(40)] + [0.0, 0.0, 1.0, 1.0], "z": [float(i % 3) for i in range(44)]}  # fmt: skip
     r = client.send("/whatif", WHATIF, table)
     assert r.status_code == 200, r.text
-    assert _where(r.json()["answer"]["errors"]) == [{"member": "a"}] and r.json()["table"]["member"] == []
+    # 48 rows behind the 2 periods ahead: 50 needed, 40 given.
+    assert _where(r.json()["answer"]["errors"]) == [{"member": "a", "code": "history_short", "needed": 50, "given": 40}] and r.json()["table"]["member"] == []
     assert whatif.MIN_HISTORY == 26 and whatif.rows_needed(np.array(hours[:40], dtype="datetime64[ms]"), 2, 2) == 48
 
 
@@ -831,24 +888,36 @@ def test_whatif_error_responses(client):
     def fields(r):
         return [e["field"] for e in r.json().get("errors", [])]
 
-    # A request that changes no input gets a 422; several inputs changed at once are read together.
+    # A scenario that moves no input of a member answers that member with a code and reads nothing for it; the other
+    # members are answered. A request whose scenario moves nothing is answered the same way, with a 200.
     same = sent(x=[0.0 if status == "scenario" else x for status, x in zip(table["status"], table["x"])])
-    assert same.status_code == 422 and fields(same) == ["status"]
+    assert same.status_code == 200 and _where(same.json()["answer"]["errors"]) == [{"member": "a", "code": "nothing_changed"}]
+    assert same.json()["table"]["member"] == [] and same.json()["answer"]["changed"] == []
+    two = _scenario(a=(50.0, 2.0), b=(50.0, 2.0))
+    two["x"] = [0.0 if (m, st) == ("b", "scenario") else x for m, st, x in zip(two["member"], two["status"], two["x"])]
+    mixed = client.send("/whatif", WHATIF, two).json()
+    assert _where(mixed["answer"]["errors"]) == [{"member": "b", "code": "nothing_changed"}] and {row["member"] for row in _rows(mixed)} == {"a"}
+    assert mixed["answer"]["changed"] == ["x"]
+    # Several inputs changed at once are read together.
     both = sent(z=[0.9 if status == "scenario" else z for status, z in zip(table["status"], table["z"])])
     assert both.status_code == 200 and both.json()["answer"]["changed"] == ["x", "z"]
     assert _rows(both.json(), status="scenario", level=0.5)[0]["sign"] == "+"
     assert [(p["member"], p["column"], p["input"]) for p in both.json()["answer"]["parts"]] == [("a", "y", "x"), ("a", "y", "z")]
     # The calendar is read from the period.
-    assert sent(period=list(range(len(table["period"])))).status_code == 400
+    integers = sent(period=list(range(len(table["period"]))))
+    assert integers.status_code == 400 and integers.json()["code"] == "period_type"
     # The periods ahead come twice, the same periods in both.
     lost = [s if i != len(table["status"]) - 1 else "plan" for i, s in enumerate(table["status"])]
-    assert sent(status=lost, period=[*table["period"][:-1], "2030-01-07"]).status_code == 400
+    lost = sent(status=lost, period=[*table["period"][:-1], "2030-01-07"])
+    assert lost.status_code == 400 and lost.json()["code"] == "ahead_mismatch"
     # A `forecast` row, no input, an unknown target, no levels.
     forecast_rows = sent(status=["forecast" if s == "plan" else s for s in table["status"]])
-    assert forecast_rows.status_code == 400 and fields(forecast_rows) == ["status"]
-    assert client.send("/whatif", WHATIF, {k: v for k, v in table.items() if k not in ("x", "z")}).status_code == 400
+    assert forecast_rows.status_code == 400 and fields(forecast_rows) == ["status"] and forecast_rows.json()["code"] == "status_forecast"
+    no_input = client.send("/whatif", WHATIF, {k: v for k, v in table.items() if k not in ("x", "z")})
+    assert no_input.status_code == 400 and no_input.json()["code"] == "input_missing"
     unknown, no_levels = sent(spec={"targets": ["nope"], "levels": [0.5]}), sent(spec={"targets": ["y"]})
-    assert (unknown.status_code, fields(unknown)) == (400, ["targets"]) and (no_levels.status_code, fields(no_levels)) == (400, ["levels"])
+    assert (unknown.status_code, fields(unknown), unknown.json()["code"]) == (400, ["targets"], "target_unknown")
+    assert (no_levels.status_code, fields(no_levels), no_levels.json()["code"]) == (400, ["levels"], "levels_invalid")
 
 
 def test_a_key_is_named_by_its_position_and_not_written_to_the_log(client, monkeypatch, capsys):
@@ -926,7 +995,7 @@ def test_the_devices_memory_running_out_fails_the_job_and_not_a_member(client, m
 
     monkeypatch.setattr(fake.chronos, "predict_quantiles", out_of_memory)
     r = client.send("/forecast", SPEC, _table(a=HISTORY, b=HISTORY))
-    assert r.status_code == 500 and r.json() == {"error": "the service failed: OutOfMemoryError"}
+    assert r.status_code == 500 and r.json() == {"error": "the service failed: OutOfMemoryError", "code": "failed"}
     for _ in range(100):  # the worker counts the failure after the caller has its answer
         if client.get("/healthz").json()["owner"]["failed"]:
             break
@@ -977,7 +1046,7 @@ def test_dictionary_encoded_text_is_a_category_and_an_unreadable_member_is_the_c
     r = client.post("/forecast", content=stream(), headers={"content-type": wire.ARROW})
     assert r.status_code == 200 and kernels.get().chronos.kinds == [{"season": "O"}]
     r = client.post("/forecast", content=stream(member=pa.array([[1]] * n)), headers={"content-type": wire.ARROW})
-    assert r.status_code == 400 and set(r.json()) == {"error"}
+    assert r.status_code == 400 and r.json()["code"] == "column_type"
 
 
 def test_a_member_that_fails_alone_is_logged_as_an_item_failure_and_not_as_an_error_response(client, monkeypatch, capsys):
@@ -992,3 +1061,12 @@ def test_a_member_that_fails_alone_is_logged_as_an_item_failure_and_not_as_an_er
     assert r.status_code == 200 and [e["member"] for e in r.json()["answer"]["errors"]] == ["b"]
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
     assert [line["event"] for line in lines if line["event"] in ("refused", "item_failed")] == ["item_failed"]
+
+
+def test_a_build_without_the_what_ifs_packages_answers_422_with_its_code(client, monkeypatch):
+    def missing(jobs, levels):
+        raise kernels.KernelError("the what-if needs TabICL's forecaster", "models_missing")
+
+    monkeypatch.setattr(kernels.get(), "series", missing)
+    r = client.send("/whatif", WHATIF, _scenario(a=(50.0, 2.0)))
+    assert r.status_code == 422 and r.json()["code"] == "models_missing"

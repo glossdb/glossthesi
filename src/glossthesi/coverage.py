@@ -1,6 +1,6 @@
 """How often the forecast's intervals covered the actual values on
 held-out data: the table a caller reads before it shows a range,
-served on every `/forecast` answer as `coverage` (`docs/contract.md`).
+served on every point row of a `/forecast` answer, in the `coverage_` columns (`docs/contract.md`).
 
 Per grain, at every step glossdb asks (12 months, 13 weeks, 31 days,
 4 quarters) and at every span up to that horizon: the share of actual
@@ -217,7 +217,7 @@ def _entry(step: int, span: int | None, interval: int, row: tuple, grain: str) -
 
 
 def held(grain: str, horizon: int, spans: list[int], levels: list[float]) -> list[dict]:
-    """The `coverage` entries of an answer: per step up to `horizon`
+    """The coverage entries of an answer: per step up to `horizon`
     and per span in `spans`, for each interval in `INTERVALS` whose two
     levels the request asked, the share of actual values inside it, its
     standard error, the points behind it and the datasets pooled. A

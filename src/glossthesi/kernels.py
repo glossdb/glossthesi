@@ -30,7 +30,11 @@ CHECKPOINTS = {HUB_REPO: [REGRESSOR, CLASSIFIER], forecast.MODEL: forecast.REVIS
 
 
 class KernelError(Exception):
-    """A request the model cannot answer, with the reason the endpoint reports."""
+    """A request the model cannot answer, with the reason the endpoint reports and a stable `code`."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
 
 
 def fetch_checkpoints() -> None:
@@ -161,7 +165,8 @@ class Kernels:
                 from tabicl.forecast._dispatch import SeriesDispatcher
             except ImportError as e:
                 raise KernelError(
-                    "the what-if needs TabICL's forecaster, and this build does not carry its packages: install `tabicl[forecast]` (pandas, statsmodels, matplotlib)"
+                    "the what-if needs TabICL's forecaster, and this build does not carry its packages: install `tabicl[forecast]` (pandas, statsmodels, matplotlib)",
+                    "models_missing",
                 ) from e
             kernel = self
 

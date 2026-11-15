@@ -80,7 +80,14 @@ GRID = (0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 
 
 
 class ForecastError(Exception):
-    """A series that cannot be forecast, in words the client can act on."""
+    """A series that cannot be forecast, in words the client can act on,
+    with a stable `code` and the numbers behind it (`detail`: for
+    `history_short`, `needed` and `given`) that go beside the words in
+    `answer.errors`."""
+
+    def __init__(self, message: str, code: str, **detail: int):
+        super().__init__(message)
+        self.code, self.detail = code, detail
 
 
 def out_of_memory(e: BaseException) -> bool:
@@ -113,32 +120,27 @@ class Series:
                 return True
         return False
 
-    def check(self, horizon: int) -> dict[int, ForecastError]:
-        """Raises where the series cannot be forecast. Comes back with
-        the columns that cannot be, by index: the series is forecast
-        for the others, with these in it as they are."""
+    def check(self) -> dict[int, ForecastError]:
+        """Raises where no column has the history a forecast needs. Comes
+        back with the columns that have not, by index: the series is
+        forecast for the others, with these in it as they are. The shape
+        of the covariates and of `width` is the endpoint's to check
+        (`app.Forecast.parse`), which builds them."""
         short = {}
         for column, values in enumerate(np.atleast_2d(self.history)):
             known = int((~np.isnan(values)).sum())
             if known < MIN_HISTORY:
                 short[column] = ForecastError(
-                    f"{known} known values of {'column ' + str(column) + ' of the ' if self.columns > 1 else ''}history: a forecast needs {MIN_HISTORY}"
+                    f"{known} known values of {'column ' + str(column) + ' of the ' if self.columns > 1 else ''}history: a forecast needs {MIN_HISTORY}",
+                    "history_short",
+                    needed=MIN_HISTORY,
+                    given=known,
                 )
         if len(short) == self.columns:
-            raise short[0] if self.columns == 1 else ForecastError(f"no column has {MIN_HISTORY} known values of history")
-        for name, values in self.past.items():
-            if values.shape[0] != self.length:
-                raise ForecastError(f"covariate `{name}`: {values.shape[0]} past values for {self.length} values of history")
-        for name, values in self.future.items():
-            if name not in self.past:
-                raise ForecastError(f"covariate `{name}` has future values and no past ones")
-            if values.shape[0] != horizon:
-                raise ForecastError(f"covariate `{name}`: {values.shape[0]} future values for a horizon of {horizon}")
-        width = np.asarray(self.width, dtype=np.float64)
-        if width.ndim == 1 and width.shape[0] != horizon:
-            raise ForecastError(f"width: {width.shape[0]} factors for a horizon of {horizon}")
-        if not np.isfinite(width).all() or (width <= 0).any():
-            raise ForecastError("width: a factor above zero, or one per period ahead")
+            if self.columns == 1:
+                raise short[0]
+            given = max(e.detail["given"] for e in short.values())
+            raise ForecastError(f"no column has {MIN_HISTORY} known values of history", "history_short", needed=MIN_HISTORY, given=given)
         return short
 
     @property
@@ -242,18 +244,26 @@ def displacement(pit_value: float) -> float:
     return abs(2.0 * pit_value - 1.0)
 
 
-def backtest_result(displacements: list[float], threshold: float) -> tuple[float, str]:
-    """The backtest's score and state over the newest point of every
-    member scored: the largest displacement raised to the power of
-    their number. The largest of k calibrated displacements is under an
-    edge e with probability e to the k, so the edges keep their base
-    rate at any count. With nothing scored the score is 0.0 and the
-    state green."""
-    if not displacements:
+def state(score: float, threshold: float) -> str:
+    """The state of a backtest score: green up to the first edge, yellow up to the second, orange up to the
+    threshold, red above it."""
+    return "green" if score <= EDGES[0] else "yellow" if score <= EDGES[1] else "orange" if score <= threshold else "red"
+
+
+def member_result(displacement: float | None, scored: int, threshold: float) -> tuple[float, str]:
+    """One member's backtest score and state: its newest displacement
+    raised to the power of the number of newest points scored in the
+    request. The largest of k calibrated displacements is under an edge
+    e with probability e to the k, so over the members the edges keep
+    their base rate at any count: among k calibrated members a red one
+    turns up at the threshold's base rate, not k times it, and the
+    dataset's state is the worst member's (`docs/forecast.md`). A member
+    whose newest point is not scored (its PIT withheld) is 0.0 and
+    green."""
+    if displacement is None or scored == 0:
         return 0.0, "green"
-    score = float(max(displacements) ** len(displacements))
-    state = "green" if score <= EDGES[0] else "yellow" if score <= EDGES[1] else "orange" if score <= threshold else "red"
-    return score, state
+    score = float(displacement**scored)
+    return score, state(score, threshold)
 
 
 def backtest_basis(threshold: float) -> dict:
@@ -261,10 +271,11 @@ def backtest_basis(threshold: float) -> dict:
     return {
         "field": "backtest",
         "threshold": threshold,
-        "basis": f"assumed: the result reads the newest backtested point of every member with a PIT, displacement |2·pit - 1| "
-        f"(0 at the median, {EDGES[0]} at the edge of the 10-90 interval, {EDGES[1]} at the edge of the 5-95 interval), the largest of k "
-        f"raised to the power k so the edges keep their base rate at any count; green up to {EDGES[0]}, yellow up to {EDGES[1]}, "
-        f"orange up to the threshold {threshold}, red above it; a point whose PIT is withheld is not scored",
+        "basis": f"assumed: a member's state reads its newest backtested point, displacement |2·pit - 1| "
+        f"(0 at the median, {EDGES[0]} at the edge of the 10-90 interval, {EDGES[1]} at the edge of the 5-95 interval), raised to the "
+        f"power k, the number of newest points with a PIT in the request, so the edges keep their base rate over the members at any "
+        f"count and the dataset's state is the worst member's; green up to {EDGES[0]}, yellow up to {EDGES[1]}, "
+        f"orange up to the threshold {threshold}, red above it; a point whose PIT is withheld is not scored and its member is green",
     }
 
 
@@ -328,12 +339,12 @@ class Chronos2:
         and so does a column. Series with the same columns and
         covariates are forecast together, in the order they were
         sent; a series mostly made of zeros goes by itself."""
-        out: list[list[dict | ForecastError] | ForecastError] = [ForecastError("not forecast")] * len(series)
+        out: list[list[dict | ForecastError] | ForecastError] = [ForecastError("not forecast", "model_failed")] * len(series)
         groups: dict[tuple, list[int]] = {}
         short: dict[int, dict[int, ForecastError]] = {}
         for i, one in enumerate(series):
             try:
-                short[i] = one.check(horizon)
+                short[i] = one.check()
                 groups.setdefault((*one.schema, i) if one.mostly_zero else one.schema, []).append(i)
             except ForecastError as e:
                 out[i] = e
@@ -352,7 +363,9 @@ class Chronos2:
                 if out_of_memory(e):
                     raise
                 for i in mine:
-                    out[i] = ForecastError(f"the model could not forecast this series and the {len(mine) - 1} sent with the same covariates: {e}")
+                    out[i] = ForecastError(
+                        f"the model could not forecast this series and the {len(mine) - 1} sent with the same covariates: {e}", "model_failed"
+                    )
                 continue
             for i, got in zip(mine, answered):
                 paths = np.asarray(got, dtype=np.float64).reshape(series[i].columns, horizon, len(asked))

@@ -34,13 +34,14 @@ STATUSES = ("actual", "plan", "forecast", "scenario")
 
 
 class Refusal(Exception):
-    """An error response: the reason, the HTTP status, and for a
-    specification that does not fit the table the fields an agent has
-    to repair."""
+    """An error response: the reason, the HTTP status, a stable `code`
+    a caller maps without reading the reason (`docs/contract.md`), and
+    for a specification that does not fit the table the fields an agent
+    has to repair."""
 
-    def __init__(self, message: str, status: int = 400, errors: list[dict] | None = None):
+    def __init__(self, message: str, status: int = 400, errors: list[dict] | None = None, *, code: str):
         super().__init__(message)
-        self.status, self.errors = status, errors
+        self.status, self.errors, self.code = status, errors, code
 
 
 @dataclass
@@ -64,14 +65,14 @@ def parse(content_type: str, raw: bytes, cap: int | None = None) -> Request:
             for batch in reader:
                 size += batch.nbytes
                 if cap is not None and size > cap:
-                    raise Refusal(f"the table decodes to more than {cap >> 20} MB — send it in parts", 413)
+                    raise Refusal(f"the table decodes to more than {cap >> 20} MB — send it in parts", 413, code="too_large")
                 batches.append(batch)
             table = pa.Table.from_batches(batches, reader.schema)
         except (pa.ArrowException, ValueError) as e:
-            raise Refusal(f"the body is not an Arrow IPC stream: {e}") from e
+            raise Refusal(f"the body is not an Arrow IPC stream: {e}", code="body_unreadable") from e
         meta = table.schema.metadata or {}
         if SPEC not in meta:
-            raise Refusal("the schema's metadata holds no `spec`: the specification goes there as JSON")
+            raise Refusal("the schema's metadata holds no `spec`: the specification goes there as JSON", code="spec_missing")
         spec = _object(meta[SPEC], "`spec`")
         table = table.replace_schema_metadata(None)
         encoding = ARROW
@@ -79,21 +80,21 @@ def parse(content_type: str, raw: bytes, cap: int | None = None) -> Request:
         try:
             body = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise Refusal(f"the body is not JSON: {e}") from e
+            raise Refusal(f"the body is not JSON: {e}", code="body_unreadable") from e
         if not isinstance(body, dict):
-            raise Refusal("the body is a JSON object with `spec` and `table`")
+            raise Refusal("the body is a JSON object with `spec` and `table`", code="body_unreadable")
         spec = body.get("spec")
         if not isinstance(spec, dict):
-            raise Refusal("`spec` is a JSON object: what to do with the table")
+            raise Refusal("`spec` is a JSON object: what to do with the table", code="spec_missing" if spec is None else "spec_unreadable")
         table = _from_json(body.get("table"))
         encoding = JSON
     else:
-        raise Refusal(f"the content type is {ARROW} or {JSON}, not {media!r}")
+        raise Refusal(f"the content type is {ARROW} or {JSON}, not {media!r}", code="content_type")
     if table.num_columns == 0 or table.num_rows == 0:
-        raise Refusal("the table holds no rows")
+        raise Refusal("the table holds no rows", code="table_empty")
     names = table.column_names
     if len(set(names)) != len(names):
-        raise Refusal("the table names a column twice")
+        raise Refusal("the table names a column twice", code="column_twice")
     return Request(table, spec, encoding)
 
 
@@ -101,27 +102,27 @@ def _object(text: bytes | str, name: str) -> dict:
     try:
         value = json.loads(text)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise Refusal(f"{name} is not JSON: {e}") from e
+        raise Refusal(f"{name} is not JSON: {e}", code="spec_unreadable") from e
     if not isinstance(value, dict):
-        raise Refusal(f"{name} is a JSON object")
+        raise Refusal(f"{name} is a JSON object", code="spec_unreadable")
     return value
 
 
 def _from_json(columns: Any) -> pa.Table:
     if not isinstance(columns, dict) or not columns:
-        raise Refusal("`table` is an object of columns, each a list of values of one length")
+        raise Refusal("`table` is an object of columns, each a list of values of one length", code="table_unreadable")
     lengths = set()
     arrays = {}
     for name, values in columns.items():
         if not isinstance(values, list):
-            raise Refusal(f"`table`: column `{name}` is a list of values")
+            raise Refusal(f"`table`: column `{name}` is a list of values", code="table_unreadable")
         lengths.add(len(values))
         try:
             arrays[name] = pa.array(values)
         except (pa.ArrowException, TypeError, ValueError) as e:
-            raise Refusal(f"`table`: column `{name}` mixes kinds of values: {e}") from e
+            raise Refusal(f"`table`: column `{name}` mixes kinds of values: {e}", code="table_unreadable") from e
     if len(lengths) != 1:
-        raise Refusal("`table`: every column holds the same number of values")
+        raise Refusal("`table`: every column holds the same number of values", code="table_unreadable")
     return pa.table(arrays)
 
 
@@ -186,11 +187,11 @@ def numeric(table: pa.Table, name: str) -> np.ndarray:
     if pa.types.is_null(column.type):
         return np.full(table.num_rows, np.nan)
     if is_category(table.schema.field(name)):
-        raise Refusal(f"column `{name}` holds text, not numbers")
+        raise Refusal(f"column `{name}` holds text, not numbers", code="column_type")
     try:
         cast = _plain(column).cast(pa.float64())
     except (pa.ArrowException, TypeError) as e:
-        raise Refusal(f"column `{name}` is not numeric ({column.type}): {e}") from e
+        raise Refusal(f"column `{name}` is not numeric ({column.type}): {e}", code="column_type") from e
     return np.asarray(cast.to_numpy(zero_copy_only=False), dtype=np.float64)
 
 
@@ -202,7 +203,7 @@ def categories(table: pa.Table, name: str) -> np.ndarray:
     try:
         cast = _plain(column).cast(pa.string())
     except (pa.ArrowException, TypeError) as e:
-        raise Refusal(f"column `{name}` cannot be read as text ({column.type}): {e}") from e
+        raise Refusal(f"column `{name}` cannot be read as text ({column.type}): {e}", code="column_type") from e
     return np.array(["" if v is None else v for v in cast.to_pylist()], dtype=object)
 
 
@@ -213,7 +214,7 @@ def status(table: pa.Table) -> np.ndarray:
     got = categories(table, "status")
     bad = sorted({v for v in got if v not in STATUSES})
     if bad:
-        raise Refusal(f"`status` is one of {', '.join(STATUSES)}; the table holds {', '.join(repr(v) for v in bad[:3])}")
+        raise Refusal(f"`status` is one of {', '.join(STATUSES)}; the table holds {', '.join(repr(v) for v in bad[:3])}", code="status_unknown")
     return got
 
 
@@ -225,32 +226,32 @@ def by_member(table: pa.Table, path: str, twice: bool = False) -> tuple[pa.Table
     the scenario) and checks that itself."""
     for name in ("member", "period"):
         if name not in table.column_names:
-            raise Refusal(f"{path} needs a `{name}` column")
+            raise Refusal(f"{path} needs a `{name}` column", code="column_missing")
     if pa.types.is_null(table.column("period").type):
-        raise Refusal("`period` holds no values")
+        raise Refusal("`period` holds no values", code="period_missing")
     if not is_category(table.schema.field("member")):
         try:
             table = table.set_column(table.schema.get_field_index("member"), "member", table.column("member").cast(pa.string()))
         except (pa.ArrowException, TypeError) as e:
-            raise Refusal(f"`member` cannot be read as text ({table.column('member').type}): {e}") from e
+            raise Refusal(f"`member` cannot be read as text ({table.column('member').type}): {e}", code="column_type") from e
     try:
         table = table.sort_by([("member", "ascending"), ("period", "ascending")])
     except pa.ArrowException as e:
-        raise Refusal(f"the rows cannot be ordered by `member` and `period`: {e}") from e
+        raise Refusal(f"the rows cannot be ordered by `member` and `period`: {e}", code="rows_unordered") from e
     members = categories(table, "member")
     if (members == "").any():
-        raise Refusal("`member` is missing on some rows")
+        raise Refusal("`member` is missing on some rows", code="member_missing")
     starts = np.flatnonzero(np.concatenate([[True], members[1:] != members[:-1]]))
     ends = np.concatenate([starts[1:], [len(members)]])
     periods = table.column("period")
     if periods.null_count:
-        raise Refusal("`period` is missing on some rows")
+        raise Refusal("`period` is missing on some rows", code="period_missing")
     if len(members) > 1 and not twice:
         same = np.asarray(pc.equal(periods.slice(1), periods.slice(0, len(members) - 1)).to_numpy(zero_copy_only=False), dtype=bool)
         twice = np.flatnonzero(same & (members[1:] == members[:-1]))
         if twice.size:
             i = int(twice[0])
-            raise Refusal(f"member `{members[i]}` has two rows of period {periods[i].as_py()!r}")
+            raise Refusal(f"member `{members[i]}` has two rows of period {periods[i].as_py()!r}", code="period_twice")
     return table, [(str(members[s]), int(s), int(e)) for s, e in zip(starts, ends)]
 
 

@@ -3,6 +3,7 @@ history is read. The tests assert signs and numbers; the text of a
 `basis` is free to change."""
 
 import numpy as np
+import pytest
 
 from glossthesi import whatif
 
@@ -79,7 +80,7 @@ def test_a_change_that_points_both_ways_over_the_periods_ahead_is_not_no_effect(
     m.scenario["z"][4:] = np.minimum(m.plan["z"][4:] + 0.3, z[:147].max())
     plan = np.full(13, 50.0)
     got = whatif.reading(m, "y", ["x", "z"], plan, plan, plan + 0.01, starts)
-    assert got["sign"] == "?" and whatif.CONFIDENCE["?"] == "not answerable"
+    assert got["sign"] == "?"
     assert (got["history_value"][:4] > plan[:4]).all() and (got["history_value"][4:] < plan[4:]).all()
     assert int((got["history_low"] > plan).sum()) == 4 and int((got["history_high"] < plan).sum()) == 9  # 4 periods up, 9 down
     # Raise x in the first ten periods instead: the horizon's mean is up and the sign is stated.
@@ -134,10 +135,13 @@ def test_a_slope_on_the_rows_alone_states_no_direction_and_an_unchanged_input_is
     plan = np.full(13, 20.0)
     got = whatif.reading(m, "y", "x", plan, plan, plan, starts)
     assert got["parts"][0]["history_low"] > 0  # the rows alone show the change moving the column, its interval off zero
-    assert got["sign"] == "0" and whatif.CONFIDENCE["0"] == "no effect visible"
-    # An input the same as planned and under the scenario for this member is `=`, unchanged: not "no effect visible".
-    same = whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
-    assert same["sign"] == "=" and whatif.CONFIDENCE["="] == "unchanged" and np.isnan(same["history_value"]).all()
+    assert got["sign"] == "0"
+    # A member the scenario moves on no input is not read: the endpoint answers it with `nothing_changed` before.
+    with pytest.raises(whatif.WhatifError) as unchanged:
+        whatif.reading(whatif.Member("a", m.stamps, m.ahead, m.targets, m.inputs, m.plan, dict(m.plan)), "y", "x", plan, plan, plan, starts)
+    assert unchanged.value.code == "nothing_changed"
+    # An input moves where a period ahead holds a known value on both sides and they differ; a gap on either side is no move.
+    assert whatif.moved_inputs({"x": np.array([1.0, np.nan]), "z": np.array([1.0, 2.0])}, {"x": np.array([1.0, 3.0]), "z": np.array([1.0, 2.5])}) == ["z"]
     # Every threshold the reading uses is declared on the answer.
     declared = {a["value"] for a in whatif.assumptions() if not isinstance(a["value"], str)}
     assert {whatif.INTERVAL, whatif.STILL, whatif.SEPARABLE, whatif.MOSTLY_EMPTY, whatif.TIED, whatif.EXTRA_ROWS} <= declared

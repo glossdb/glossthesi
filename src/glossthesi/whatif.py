@@ -57,7 +57,17 @@ MEDIAN = 0.5
 
 
 class WhatifError(Exception):
-    """A member or target the what-if cannot answer, with the reason the endpoint reports."""
+    """A member or target the what-if cannot answer, with the reason the endpoint reports and a stable `code`."""
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
+def moved_inputs(plan: dict[str, np.ndarray], scenario: dict[str, np.ndarray]) -> list[str]:
+    """The inputs a scenario moves, in the order given: those with a period ahead whose value is known as planned and
+    under the scenario, and differs. A value unknown on either side is no change the history can be read for."""
+    return [c for c in plan if (np.isfinite(plan[c]) & np.isfinite(scenario[c]) & (plan[c] != scenario[c])).any()]
 
 
 # -- reading the history ---------------------------------------------------------
@@ -324,15 +334,11 @@ def reading(member: Member, target: str, changed: str | list[str], held_back: np
         "error": float(np.nanmean(np.abs(held_back - y[-h:]))) if (~np.isnan(y[-h:])).any() else np.nan,
         "history_value": np.full(h, np.nan), "history_low": np.full(h, np.nan), "history_high": np.full(h, np.nan),
     }  # fmt: skip
-    # An input that is the same as planned for this member is not changed for it; none changed is no change.
-    differs = [c for c in changed if (deltas[c][~np.isnan(deltas[c])] != 0).any()]
-    if not differs:
-        return out | {
-            "sign": "=",
-            "basis": ("the input is" if len(changed) == 1 else "the inputs are")
-            + " the same as planned and under the scenario for this member: nothing is changed",
-        }
-    changed = differs
+    # An input the request changes and this member does not is no change for it. A member that the scenario moves on
+    # no input is not read: the endpoint answers it with `nothing_changed` (`moved_inputs`).
+    changed = [c for c in changed if c in moved_inputs(member.plan, member.scenario)]
+    if not changed:
+        raise WhatifError("the scenario moves no input of this member", "nothing_changed")
     one = len(changed) == 1
     name = (lambda c: "the input") if one else (lambda c: f"the input `{c}`")
     # An empty cell is unknown, not zero. An input that is mostly empty is not read: the changed one cannot be
@@ -473,7 +479,6 @@ def _tied(member: Member, changed: str, read: list[str]) -> str:
     return f"the input `{name}`" if best >= TIED else "the other inputs and the calendar's cycles"
 
 
-CONFIDENCE = {"+": "direction", "-": "direction", "0": "no effect visible", "?": "not answerable", "=": "unchanged"}
 TIED = 0.90  # the correlation at which an input is said to follow another by name
 EXTRA_ROWS = 8  # the rows the history's regression needs beyond the columns it holds
 
@@ -534,6 +539,11 @@ def assumptions() -> list[dict]:
             "field": "basis",
             "value": REACH,
             "basis": "assumed: a combination of several changed inputs lies beyond what the history holds together where it lies farther from every history row than the distance within which this share of history rows find a nearest neighbour, each input scaled by its spread in the history; the reach is a quantile, so that one mistyped row does not widen it",
+        },
+        {
+            "field": "coverage",
+            "value": None,
+            "basis": "assumed: no interval of the what-if has a stated coverage — neither the model's quantiles under a changed input nor the range between the model's and the history's estimates were measured against outcomes; `coverage` is empty, and the coverage of `/forecast` does not apply here (docs/whatif.md)",
         },
         {
             "field": "basis",
