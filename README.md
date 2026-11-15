@@ -6,7 +6,7 @@ configured with this service's URL and calls it over HTTP.
 
 | Task | Endpoint | Model |
 |---|---|---|
-| Forecast of time series with prediction intervals. With `origins`, a rolling-origin backtest: past periods forecast from the history before them, with the PIT per point and one result (score and state) over all members. glossdb computes its expected ranges from the backtest | `POST /forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
+| Forecast of time series with prediction intervals. With `origins`, a rolling-origin backtest: past periods forecast from the history before them, with the PIT and the displacement per point and a score and state per member. glossdb computes its expected ranges from the backtest | `POST /forecast` | Chronos-2 (`chronos-forecasting`, Apache-2.0), as its package ships it |
 | What-if: the direction a column moves when one or several inputs change, stated where the member's own history and the model agree, with the reason, both estimates, and the error on a held-back period. glossdb computes its scenarios from it | `POST /whatif` | TabICL's forecaster, as its package ships it, and a regression on the member's own history |
 
 Status: preview. What each endpoint answers, how it works and what
@@ -56,14 +56,15 @@ The contract is `docs/contract.md`. In short:
   the schema's metadata under `spec`, or JSON with the table column
   by column beside `spec`. The answer comes back in the request's
   encoding. Its `answer` object names the service, the version and
-  the members or columns that failed on their own.
-- An error response is JSON, `{"error": …}` with a 4xx or 5xx status.
-  Where a field of the specification is at fault, `errors` names it.
+  the members or columns that failed on their own, each with a `code`.
+- An error response is JSON, `{"error": …, "code": …}` with a 4xx or
+  5xx status. Where a field of the specification is at fault, `errors`
+  names it. The codes are listed in `docs/contract.md`.
 
 | endpoint | specification | answer table |
 |---|---|---|
-| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for a backtest, `threshold` for its red state | A row per member, origin, step, column and level: `value`; `actual` and `pit` where the table holds the actual value; `withheld` with the reason where a PIT is not given. The answer object's `coverage` says how often each interval covered the actual values on held-out data at that grain and step. With `origins`, its `backtest` field carries the backtest's result: per member the share of points inside the 80% and the 90% interval and the newest point, and one score and state over all members |
-| `POST /whatif` | `targets`, `levels` | A row per member, column, status (`held_back`, `plan`, `scenario`), period and level: the model's `value`, the history's estimate with its interval, `sign`, `confidence` and `basis` |
+| `POST /forecast` | `targets`, `horizon`, `levels`; `totals`, `grain`, `width`; `origins` for a backtest, `threshold` for its red state | A row per member, origin, step, column and level: `value`; `actual`, `pit` and `displacement` where the table holds the actual value; `withheld` with the reason where a PIT is not given; `coverage_80` and `coverage_90` with their standard errors, points and datasets: how often that interval covered the actual values on held-out data at that grain and step. With `origins`, the answer object's `backtest` carries per member the share of points inside the 80% and the 90% interval, and the score and state of its newest point |
+| `POST /whatif` | `targets`, `levels` | A row per member, column, status (`held_back`, `plan`, `scenario`), period and level: the model's `value`, `effect` (the scenario's median minus the plan's), the history's estimate with its interval, `sign` and `basis` |
 | `GET /healthz` | | `status`, `service`, `version`, `device`, `loaded`, `checkpoints`, `owner` (the queue's counters) |
 
 A forecast, in the JSON encoding:

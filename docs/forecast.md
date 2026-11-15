@@ -21,9 +21,9 @@ evaluation; the code and the contract use the same tags.
   interval covers close to 80% of the actual values at every step
   asked and for the totals; on daily data for the nearest days. On
   monthly data it covers less at every step: 75% one month ahead, 67%
-  at twelve, 71% averaged over the months of a year. Every answer carries the coverage at
-  each step asked, per grain (GK-46, `coverage`), so a caller reads
-  it before it shows a range.
+  at twelve, 71% averaged over the months of a year. Every point of
+  the answer carries the coverage of its step, per grain (GK-46, the
+  `coverage_` columns), so a caller reads it before it shows a range.
 - **Totals from the same forecast.** The total of a quarter or a
   year comes with its own interval, combined from the periods'
   intervals.
@@ -66,17 +66,48 @@ evaluation; the code and the contract use the same tags.
    the intervals are too narrow or too wide.
 5. **The backtest** (GK-42): with `origins`, each origin is forecast
    from the history up to it. The PIT is read against the model's
-   own 21 quantile levels, by linear interpolation. With a backtest
-   the answer carries a result: a score and a state over the newest
-   point of every member (`docs/contract.md`).
-6. **Coverage** (GK-46): every answer carries, per step and span and
-   per interval the request's levels form, the share of actual values
-   inside such an interval on held-out data at that grain, with its
-   standard error, the points behind it and the number of datasets
-   pooled (`coverage.py`). A span's share was measured at the
+   own 21 quantile levels, by linear interpolation. Every point with a
+   PIT carries its displacement, |2·pit − 1|. With a backtest the
+   answer carries a score and a state per member, read from its newest
+   point (below, and `docs/contract.md`).
+6. **Coverage** (GK-46): every point row carries, for its step or
+   span and per interval the request's levels form, the share of
+   actual values inside such an interval on held-out data at that
+   grain, with its standard error, the points behind it and the number
+   of datasets pooled (`coverage.py`). A span's share was measured at the
    dependence of its grain. If a grain's dependence changes, the
    service serves that grain's steps and no spans until the table is
    measured again.
+
+## The backtest's state per member
+
+A backtest asks one question per member at each load: does its
+newest complete period lie where its own history predicted? The
+displacement of that point, |2·pit − 1|, is uniform between 0 and 1
+when the forecast is calibrated, so a member judged on its own
+displacement against a threshold of 0.98 is red on 2% of loads with
+nothing wrong. A dataset of 50 metrics would then show a red metric
+on most loads.
+
+The service judges each member under the rule of the whole request
+instead. A member's score is its displacement raised to the power k,
+the number of members' newest points with a PIT in the request. The
+largest of k calibrated displacements lies under an edge e with
+probability e to the k, so the chance that some member of a
+calibrated dataset is red stays at 1 − threshold, at any k. The
+dataset's state is the worst member's, and the member that carries
+it is named.
+
+- **What it costs:** the same displacement reads differently with
+  the number of members sent. 0.985 is red alone (above 0.98) and
+  orange beside one other member (0.985² = 0.970). A single metric
+  needs a larger miss to turn red in a request of many.
+- **What the caller does:** sends the metrics that are judged
+  together in one request, with the test's threshold, and stores the
+  states. It computes none.
+- **A member whose newest PIT is withheld** (the actual within one
+  resolution step of the median) scores 0.0 and is green; it does not
+  count in k.
 
 ## What was measured
 

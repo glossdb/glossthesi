@@ -9,8 +9,8 @@ tag in brackets (GK-50) names a finding in the evaluation.
   moves under a change, roughly how much, and which plan is better,
   with a range.
 - **One model:** TabICL's forecaster. The measurements use real data.
-- **The answer is explained.** It carries the reason, the confidence
-  and the error, so that a user sees it is an estimate and how
+- **The answer is explained.** It carries the sign, the reason and
+  the error, so that a user sees it is an estimate and how
   uncertain it is.
 
 ## What the endpoint answers
@@ -35,6 +35,17 @@ tag in brackets (GK-50) names a finding in the evaluation.
   estimate of the change is read against.
 - **"No effect visible" is not "no effect".** It says that this
   member's data does not show one.
+- **No stated coverage.** Neither the model's quantiles under a
+  changed input nor the range between the two estimates were measured
+  against what a change did, so the answer states no coverage for
+  them (`assumptions`, `field` `coverage`). The coverage of
+  `/forecast` does not carry over.
+- **One scenario against its plan.** The answer is per member and
+  period: the model's `effect` (its median under the scenario minus
+  its median as planned) and the history's estimate. The caller
+  writes the changed inputs: the service applies no factors and
+  forecasts no input, and it does not choose between plans; comparing
+  two scenarios is two requests read side by side.
 
 No table holds what would have happened under an input that was not
 changed. So on business data the direction cannot be scored against
