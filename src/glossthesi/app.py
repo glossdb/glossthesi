@@ -1,30 +1,31 @@
-"""The doors of the service: one table and a specification in, one
+"""The endpoints of the service: one table and a specification in, one
 table and an answer out (`docs/contract.md`, `wire.py`).
 
-Two reads on the one table — `/forecast` for the periods ahead and
-the walk, `/whatif` for which way a column moves under a changed
-input — and `/healthz`. Nothing here knows about datasets, metrics
-or actors: a request is numbers and a key.
+Two POST endpoints on the one table — `/forecast` for the periods
+ahead and for the rolling-origin backtest, `/whatif` for the direction
+a column moves under a changed input — and `GET /healthz`. Nothing
+here knows about datasets, metrics or actors: a request is numbers and
+a key.
 
-Authentication, by what is set — the same `Authorization: Bearer …`
-header either way, and the caller it names is whose share of the queue
-the request counts against:
+Authentication depends on what is set. The header is
+`Authorization: Bearer …` in each case, and the caller it names is the
+one whose share of the queue the request counts against:
 
 - `GLOSSTHESI_AUDIENCE` and `GLOSSTHESI_CALLERS`: a Google-signed ID
   token for that audience (the service's own URL) from one of the listed
-  service accounts. That is what a caller on Cloud Run, GKE or a VM mints
-  from its metadata server for the URL it calls — no key anywhere. Cloud
-  Run checks the same token in front when the service requires
-  authentication; the service checks it again, so one left open by
-  mistake still refuses. The caller is the account's email.
+  service accounts. A caller on Cloud Run, GKE or a VM gets such a token
+  from its metadata server for the URL it calls, so no key is stored.
+  Cloud Run checks the same token in front when the service requires
+  authentication; the service checks it again, so a service left open
+  by mistake still answers 401. The caller is the account's email.
 - `GLOSSTHESI_KEYS`: shared bearer keys, comma-separated (a laptop, a
-  test host). The caller is the key's place in the list (`key-1`),
-  never the key itself: the caller's name goes to the logs.
-- neither: every request is refused, and the service does not start.
-- `GLOSSTHESI_INSECURE_OPEN=true`: the one way around, as in glossdb.
-  The doors serve without authentication and every caller is recorded
-  as `insecure_dev_mode`. The name is the warning: a laptop trying the
-  service out, never a deployment.
+  test host). The caller is the key's position in the list (`key-1`),
+  not the key: the caller's name is written to the logs.
+- neither: every request is answered 401, and the service does not start.
+- `GLOSSTHESI_INSECURE_OPEN=true`: the endpoints serve without
+  authentication and every caller is recorded as `insecure_dev_mode`,
+  as in glossdb. For trying the service out on a laptop, not for a
+  deployment.
 """
 
 from __future__ import annotations
@@ -53,8 +54,8 @@ from .wire import Refusal
 SERVICE = "glossthesi"
 VERSION = os.environ.get("GLOSSTHESI_VERSION", "") or "dev"
 
-# Handlers never touch the model: one owner per device takes what is
-# waiting from every caller and answers it in turn (owner.py).
+# Handlers do not call the model: one worker thread per device (`Owner`,
+# owner.py) takes the waiting jobs of every caller in turn.
 _OWNER: Owner | None = None
 _OWNER_LOCK = threading.Lock()
 
@@ -65,9 +66,9 @@ MAX_BODY_MB = int(os.environ.get("GLOSSTHESI_MAX_BODY_MB", "") or 32)
 
 class _Flag:
     """A flag set from a signal handler, so it takes no lock: the handler
-    may be entered again before it returns, and a lock the outer entry
-    holds then stops the main thread for good (`__main__._Server`,
-    glossval GV-30). A bool written under the GIL needs none."""
+    may be entered again before it returns, and a lock held by the outer
+    entry would then block the main thread (`__main__._Server`, glossval
+    GV-30). A bool written under the GIL needs no lock."""
 
     __slots__ = ("_set",)
 
@@ -82,8 +83,8 @@ class _Flag:
 
 
 # Set when the host has asked the process to stop: what is in flight is
-# finished, and a request arriving on a kept connection is sent back to
-# retry (a 503 with `Retry-After`) — the host has already moved traffic.
+# finished, and a request arriving on a kept connection gets a 503 with
+# `Retry-After`: the host has already moved traffic to another instance.
 DRAINING = _Flag()
 
 
@@ -101,28 +102,29 @@ def _names(variable: str) -> set[str]:
 
 
 def _keys() -> list[str]:
-    """The bearer keys in the order set: a key is named by its place."""
+    """The bearer keys in the order set: a key is named by its position in the list."""
     return [k.strip() for k in os.environ.get("GLOSSTHESI_KEYS", "").split(",") if k.strip()]
 
 
-INSECURE_DEV_MODE = "insecure_dev_mode"  # who every caller is where nobody is verified: glossdb's name for it
-UNARRANGED = (
-    "nothing says who may call: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
-    "GLOSSTHESI_INSECURE_OPEN=true serves open instead, every caller insecure_dev_mode"
+INSECURE_DEV_MODE = "insecure_dev_mode"  # the caller's name where no caller is verified, the same name glossdb uses
+AUTH_NOT_CONFIGURED = (
+    "no authentication is configured: set GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS, or GLOSSTHESI_KEYS; "
+    "GLOSSTHESI_INSECURE_OPEN=true serves without authentication and records every caller as insecure_dev_mode"
 )
 
 
 def insecure_open() -> bool:
-    """Only the literal `true` counts: the switch is a statement, never a fallback."""
+    """True only for the literal `true`; any other value leaves authentication on."""
     return os.environ.get("GLOSSTHESI_INSECURE_OPEN", "").strip() == "true"
 
 
-def arrangement() -> str | None:
-    """How a caller is verified; None where nothing is arranged, and then nothing is served."""
+def auth_mode() -> str | None:
+    """How a caller is verified: `insecure-open`, `id-token` or `keys`. None where no authentication is configured,
+    and then no request is served."""
     if insecure_open():
         return "insecure-open"
     if os.environ.get("GLOSSTHESI_AUDIENCE", "").strip():
-        return "id-token" if _names("GLOSSTHESI_CALLERS") else None  # an audience nobody is allowed for is nothing arranged
+        return "id-token" if _names("GLOSSTHESI_CALLERS") else None  # an audience without allowed callers is not a configuration
     return "keys" if _keys() else None
 
 
@@ -181,7 +183,7 @@ def _caller(request: Request) -> str | None:
         return email if email is not None and email in callers else None
     if not token:
         return None
-    # A key is never the caller's name — the name goes to the logs — and every key is compared, in constant time.
+    # The caller's name is the key's position, not the key, because the name is logged. Every key is compared, in constant time.
     found = None
     for i, key in enumerate(_keys(), start=1):
         if hmac.compare_digest(token.encode(), key.encode()):
@@ -194,30 +196,31 @@ async def _body(request: Request) -> bytes:
     cap = MAX_BODY_MB * 1024 * 1024
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > cap:
-        raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413)
+        raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413, code="too_large")
     chunks, size = [], 0
     async for chunk in request.stream():
         size += len(chunk)
         if size > cap:
-            raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413)
+            raise Refusal(f"the body is over {MAX_BODY_MB} MB — send it in parts", 413, code="too_large")
         chunks.append(chunk)
     return b"".join(chunks)
 
 
-def _door(read):
-    """Wrap a read: auth, the body as a table and a specification, the
-    owner's queue, the answer in the request's encoding, refusals as JSON."""
+def _endpoint(read):
+    """Wrap one kind of request: authentication, the body as a table and
+    a specification, the worker's queue, the answer in the request's
+    encoding, error responses as JSON."""
 
-    async def endpoint(request: Request) -> Response:
-        route = request.url.path
+    async def handler(request: Request) -> Response:
+        path = request.url.path
         if DRAINING.is_set():
-            telemetry.refused(503, None, route, "draining")
-            return JSONResponse({"error": "this instance is stopping — retry"}, status_code=503, headers={"Retry-After": "2"})
+            telemetry.refused(503, None, path, "draining")
+            return JSONResponse({"error": "this instance is stopping — retry", "code": "draining"}, status_code=503, headers={"Retry-After": "2"})
         caller = await run_in_threadpool(_caller, request)
         if caller is None:
-            telemetry.refused(401, None, route, "unauthorized")
-            said = "unauthorized: a bearer this service accepts" if arrangement() else f"unauthorized: {UNARRANGED}"
-            return JSONResponse({"error": said}, status_code=401)
+            telemetry.refused(401, None, path, "unauthorized")
+            message = "unauthorized: send a bearer token this service accepts" if auth_mode() else f"unauthorized: {AUTH_NOT_CONFIGURED}"
+            return JSONResponse({"error": message, "code": "unauthorized"}, status_code=401)
         try:
             raw = await _body(request)
             parsed = await run_in_threadpool(wire.parse, request.headers.get("content-type", ""), raw, MAX_BODY_MB * 1024 * 1024)
@@ -226,29 +229,29 @@ def _door(read):
             body, media = await run_in_threadpool(wire.encode, table, {"service": SERVICE, "version": VERSION} | answer, parsed.encoding)
             return Response(body, media_type=media)
         except Refusal as e:
-            refusal, status, headers = e, e.status, None
+            refusal, status, headers, code = e, e.status, None, e.code
         except Busy as e:
-            refusal, status, headers = e, 429, {"Retry-After": str(e.retry_after)}
+            refusal, status, headers, code = e, 429, {"Retry-After": str(e.retry_after)}, "busy"
         except TooLarge as e:
-            refusal, status, headers = e, 413, None
-        except (kernels.KernelError, forecast.ForecastError, whatif.WhatifError) as e:
-            refusal, status, headers = e, 422, None
-        except Exception as e:  # noqa: BLE001 — a failure is a 500 with the traceback in the log, not on the wire
-            telemetry.log.error("request_failed", extra={"route": route, "caller": caller}, exc_info=e)
-            telemetry.refused(500, caller, route, type(e).__name__)
-            return JSONResponse({"error": f"the service failed: {type(e).__name__}"}, status_code=500)
-        telemetry.refused(status, caller, route, str(refusal))
-        body: dict[str, Any] = {"error": str(refusal)}
+            refusal, status, headers, code = e, 413, None, "too_large"
+        except kernels.KernelError as e:
+            refusal, status, headers, code = e, 422, None, e.code
+        except Exception as e:  # noqa: BLE001 — a failure is a 500 with the traceback in the log, not in the response
+            telemetry.log.error("request_failed", extra={"route": path, "caller": caller}, exc_info=e)
+            telemetry.refused(500, caller, path, type(e).__name__)
+            return JSONResponse({"error": f"the service failed: {type(e).__name__}", "code": "failed"}, status_code=500)
+        telemetry.refused(status, caller, path, str(refusal))
+        body: dict[str, Any] = {"error": str(refusal), "code": code}
         if isinstance(refusal, Refusal) and refusal.errors:
             body["errors"] = refusal.errors
         return JSONResponse(body, status_code=status, headers=headers)
 
-    return endpoint
+    return handler
 
 
-def _spec(field: str, message: str, status: int = 400) -> Refusal:
-    """A specification refused: the message, and the field at fault named for an agent to repair."""
-    return Refusal(message, status, [{"field": field, "error": message}])
+def _spec(field: str, code: str, message: str) -> Refusal:
+    """An error for one field of the specification: the message, its code, and the field's name so that an agent can repair it."""
+    return Refusal(message, 400, [{"field": field, "code": code, "error": message}], code=code)
 
 
 def _levels(spec: dict[str, Any], grid: tuple[float, float] | None = None) -> list[float]:
@@ -256,13 +259,14 @@ def _levels(spec: dict[str, Any], grid: tuple[float, float] | None = None) -> li
     rather than answered with the grid's edge under the level's name."""
     value = spec.get("levels")
     if not isinstance(value, list) or not value:
-        raise _spec("levels", "`levels` is a non-empty list of quantile levels")
+        raise _spec("levels", "levels_invalid", "`levels` is a non-empty list of quantile levels")
     low, high = grid or (0.0, 1.0)
     out = []
     for a in value:
         if not isinstance(a, (int, float)) or isinstance(a, bool) or not (low <= float(a) <= high if grid else 0.0 < float(a) < 1.0):
             raise _spec(
                 "levels",
+                "level_outside_grid" if grid else "levels_invalid",
                 f"every one of `levels` lies between {low:g} and {high:g}, the model's own grid"
                 if grid
                 else "every one of `levels` lies strictly between 0 and 1",
@@ -276,6 +280,40 @@ def _period(column: pa.ChunkedArray, row: int) -> Any:
 
 
 # -- /forecast ----------------------------------------------------------------
+
+# The columns of a point row that carry the coverage of its step or span from the held-out table (`coverage.held`):
+# the share inside the 80% and the 90% interval with their standard errors, the points and the datasets behind them.
+COVERAGE = ("coverage_80", "coverage_80_se", "coverage_90", "coverage_90_se", "coverage_points", "coverage_datasets")
+
+
+def _covered(held: list[dict]):
+    """Per step and span, the `COVERAGE` values of the entries of `coverage.held`; None where there is no entry."""
+    at: dict[tuple[int, int | None], dict[tuple[float, float], dict]] = {}
+    for e in held:
+        at.setdefault((e["step"], e["span"]), {})[e["low"], e["high"]] = e
+    nothing = (None,) * len(COVERAGE)
+
+    def covered(step: int, span: int | None) -> tuple:
+        got = at.get((step, span))
+        if not got:
+            return nothing
+        c80, c90 = (got.get(i) for i in coverage.INTERVALS)
+        some = c80 or c90
+        return (
+            c80 and c80["share"],
+            c80 and c80["se"],
+            c90 and c90["share"],
+            c90 and c90["se"],
+            some["points"],
+            some["datasets"],
+        )
+
+    return covered
+
+
+def _failed(e: Exception) -> dict:
+    """A per-item error from the forecaster: its code, the numbers behind it, and its words."""
+    return {"code": getattr(e, "code", "model_failed"), **getattr(e, "detail", {}), "error": str(e)}
 
 
 @dataclass
@@ -299,15 +337,15 @@ class _ForecastPlan:
     values: dict[str, np.ndarray]
     status: np.ndarray
     errors: list[dict] = field(default_factory=list)
-    demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, said in `assumptions`
-    walk: bool = False  # `origins` given: the answer carries the walk's verdict
+    demoted: list[dict] = field(default_factory=list)  # covariates the rows ahead do not hold for the whole horizon, listed in `assumptions`
+    backtest: bool = False  # `origins` given: the answer carries the backtest's result
     threshold: float = forecast.THRESHOLD
 
 
 class Forecast:
     """Quantile forecasts by Chronos-2 (`forecast.py`) of the `targets`
     of every member, `horizon` periods past its last actual row — or,
-    with `origins`, from past origins: the walk and a backtest, with
+    with `origins`, from past origins: a rolling-origin backtest, with
     the actual value and the PIT where the table holds the actual.
 
     The table's actual rows are a member's history, in period order;
@@ -319,39 +357,39 @@ class Forecast:
     def parse(table: pa.Table, spec: dict[str, Any]) -> _ForecastPlan:
         targets = spec.get("targets")
         if not isinstance(targets, list) or not targets or any(not isinstance(t, str) for t in targets):
-            raise _spec("targets", "`targets` is a non-empty list of the columns to forecast")
+            raise _spec("targets", "targets_invalid", "`targets` is a non-empty list of the columns to forecast")
         for t in targets:
             if t in wire.RESERVED or t not in table.column_names:
-                raise _spec("targets", f"`targets`: the table has no value column `{t}`")
+                raise _spec("targets", "target_unknown", f"`targets`: the table has no value column `{t}`")
             if wire.is_category(table.schema.field(t)):
-                raise _spec("targets", f"`targets`: column `{t}` holds text, and a forecast needs numbers")
+                raise _spec("targets", "target_text", f"`targets`: column `{t}` holds text, and a forecast needs numbers")
         if len(set(targets)) != len(targets):
-            raise _spec("targets", "`targets` names a column twice")
+            raise _spec("targets", "target_twice", "`targets` names a column twice")
         origins = spec.get("origins")
         if origins is not None and not (
             (isinstance(origins, int) and not isinstance(origins, bool) and origins >= 1) or (isinstance(origins, list) and origins)
         ):
-            raise _spec("origins", "`origins` is a number of periods to walk, or a non-empty list of periods to forecast from")
+            raise _spec("origins", "origins_invalid", "`origins` is the number of past periods to backtest, or a non-empty list of periods to forecast from")
         horizon = spec.get("horizon", 1 if origins is not None else None)
         if not isinstance(horizon, int) or isinstance(horizon, bool) or not 1 <= horizon <= forecast.MAX_HORIZON:
-            raise _spec("horizon", f"`horizon` is how many periods ahead, a whole number from 1 to {forecast.MAX_HORIZON}")
+            raise _spec("horizon", "horizon_invalid", f"`horizon` is how many periods ahead, a whole number from 1 to {forecast.MAX_HORIZON}")
         spans = spec.get("totals", [])
         if not isinstance(spans, list) or any(not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= horizon for n in spans):
-            raise _spec("totals", "`totals` is a list of spans in periods, each from 1 to the horizon")
+            raise _spec("totals", "totals_invalid", "`totals` is a list of spans in periods, each from 1 to the horizon")
         grain = spec.get("grain", "month")
         if grain not in forecast.GRAINS:
-            raise _spec("grain", f"`grain` is one of {', '.join(forecast.GRAINS)}")
+            raise _spec("grain", "grain_unsupported", f"`grain` is one of {', '.join(forecast.GRAINS)}")
         width = spec.get("width", 1.0)
         factors = width if isinstance(width, list) else [width]
         if not factors or any(not isinstance(w, (int, float)) or isinstance(w, bool) or not 0 < w < math.inf for w in factors):
-            raise _spec("width", "`width` is a number above zero, or a list of one per period of the horizon")
+            raise _spec("width", "width_invalid", "`width` is a number above zero, or a list of one per period of the horizon")
         if isinstance(width, list) and len(width) != horizon:
-            raise _spec("width", f"`width`: {len(width)} factors for a horizon of {horizon}")
+            raise _spec("width", "width_invalid", f"`width`: {len(width)} factors for a horizon of {horizon}")
         width = np.array(width, dtype=np.float64) if isinstance(width, list) else float(width)
         levels = _levels(spec, (forecast.GRID[0], forecast.GRID[-1]))
         threshold = spec.get("threshold", forecast.THRESHOLD)
         if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 < threshold <= 1:
-            raise _spec("threshold", "`threshold` is the walk's red line, a number above zero and at most 1")
+            raise _spec("threshold", "threshold_invalid", "`threshold` is the backtest score above which the state is red, a number above zero and at most 1")
 
         table, members = wire.by_member(table, "/forecast")
         status = wire.status(table)
@@ -362,23 +400,34 @@ class Forecast:
         words = {c: wire.categories(table, c) for c in texts}
         covariates = [c for c in numbers + texts if c not in targets]
         errors: list[dict] = []
-        walks: list[list[_Input]] = []  # per member, its inputs oldest origin first
+        per_member: list[list[_Input]] = []  # per member, its inputs oldest origin first
         demoted: dict[tuple[str, str], dict] = {}
         for member, s, e in members:
             actual = status[s:e] == "actual"
             n = int(actual.sum())
             if n and not actual[:n].all():
                 first = int(np.flatnonzero(~actual)[0])
-                raise Refusal(f"member `{member}`: a {status[s + first]} row before its last actual row — the history comes first, then the periods ahead")
+                raise Refusal(
+                    f"member `{member}`: a {status[s + first]} row before its last actual row — the history comes first, then the periods ahead",
+                    code="status_order",
+                )
             if n == 0:
-                errors.append({"member": member, "error": "no actual rows to forecast from"})
+                errors.append({"member": member, "code": "no_history", "error": "no actual rows to forecast from"})
                 continue
             if origins is None:
                 mine = [n - 1]
             elif isinstance(origins, int):
                 mine = [n - 1 - j for j in range(origins, 0, -1) if n - 1 - j >= 0]
                 if len(mine) < origins:
-                    errors.append({"member": member, "error": f"{n} actual periods: a walk of {origins} needs {origins + 1}; {len(mine)} walked"})
+                    errors.append(
+                        {
+                            "member": member,
+                            "code": "origins_short",
+                            "needed": origins + 1,
+                            "given": n,
+                            "error": f"{n} actual periods: a backtest of {origins} origins needs {origins + 1}; {len(mine)} backtested",
+                        }
+                    )
             else:
                 labels = [str(v) for v in wire.clean(periods.slice(s, n).to_pylist())]
                 mine = []
@@ -386,7 +435,7 @@ class Forecast:
                     if str(asked) in labels:
                         mine.append(labels.index(str(asked)))
                     else:
-                        errors.append({"member": member, "origin": asked, "error": "no actual period of that name"})
+                        errors.append({"member": member, "origin": asked, "code": "origin_unknown", "error": "no actual period of that name"})
                 mine.sort()
             inputs = []
             for o in mine:
@@ -412,9 +461,9 @@ class Forecast:
                             "basis": f"assumed: `{c}` is known over the history only — the rows ahead do not hold it for the whole horizon ({why}), so it informed the forecast as a past covariate, not as a known future",
                         }
                 inputs.append(_Input(member, s, e, s + o, forecast.Series(history, past, future, width)))
-            walks.append(inputs)
+            per_member.append(inputs)
         # Origin-major, so that the series forecast together are those of one origin, as a request per origin would send them.
-        ordered = [walk[j] for j in range(max((len(w) for w in walks), default=0)) for walk in walks if j < len(walk)]
+        ordered = [mine[j] for j in range(max((len(m) for m in per_member), default=0)) for mine in per_member if j < len(mine)]
         return _ForecastPlan(
             table,
             targets,
@@ -427,7 +476,7 @@ class Forecast:
             status,
             errors,
             list(demoted.values()),
-            walk=origins is not None,
+            backtest=origins is not None,
             threshold=float(threshold),
         )
 
@@ -440,18 +489,22 @@ class Forecast:
         )
         periods = plan.table.column("period")
         h, levels = plan.horizon, np.asarray(plan.levels)
-        cols: dict[str, list] = {name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit", "withheld")}
+        held = coverage.held(plan.grain, plan.horizon, plan.spans, plan.levels)
+        covered = _covered(held)
+        cols: dict[str, list] = {
+            name: [] for name in ("member", "origin", "step", "period", "span", "column", "level", "value", "actual", "pit", "withheld", *COVERAGE)
+        }
         errors = list(plan.errors)
-        walked: dict[tuple[str, str], list[tuple[int, Any, float, str | None]]] = {}  # per member and target, its step-one points with an actual
+        backtested: dict[tuple[str, str], list[tuple[int, Any, float, str | None]]] = {}  # per member and target, its step-one points with an actual
         for one, answer in zip(plan.inputs, got):
             where = {"member": one.member, "origin": _period(periods, one.origin)}
             if isinstance(answer, Exception):
-                errors.append(where | ({"column": plan.targets[0]} if len(plan.targets) == 1 else {}) | {"error": str(answer)})
+                errors.append(where | ({"column": plan.targets[0]} if len(plan.targets) == 1 else {}) | _failed(answer))
                 continue
             rows = one.end - one.origin - 1  # periods the table holds past the origin
             for target, column in zip(plan.targets, answer):
                 if isinstance(column, Exception):
-                    errors.append(where | {"column": target, "error": str(column)})
+                    errors.append(where | {"column": target} | _failed(column))
                     continue
                 q, raw = column["quantiles"], column["raw"]
                 actual = np.full(h, np.nan)
@@ -460,7 +513,7 @@ class Forecast:
                     known = plan.status[one.origin + 1 : one.origin + 1 + ahead] == "actual"
                     actual[:ahead] = np.where(known, plan.values[target][one.origin + 1 : one.origin + 1 + ahead], np.nan)
                 pits = np.array([forecast.pit(raw[step], actual[step]) if np.isfinite(actual[step]) else np.nan for step in range(h)])
-                # The withheld rule, the service's own: a PIT read against a corridor narrower than the series' grid says nothing
+                # When a PIT is withheld: read against a range narrower than the series' resolution it carries no information
                 history = plan.values[target][one.start : one.origin + 1]
                 grid_step = forecast.resolution(history)
                 withheld: list[str | None] = [None] * h
@@ -472,8 +525,8 @@ class Forecast:
                         )
                         if withheld[step] is not None:
                             pits[step] = np.nan
-                if plan.walk and np.isfinite(actual[0]):
-                    walked.setdefault((one.member, target), []).append((one.origin, _period(periods, one.origin + 1), float(pits[0]), withheld[0]))
+                if plan.backtest and np.isfinite(actual[0]):
+                    backtested.setdefault((one.member, target), []).append((one.origin, _period(periods, one.origin + 1), float(pits[0]), withheld[0]))
                 n = h * len(levels)
                 cols["member"] += [one.member] * n
                 cols["origin"] += [one.origin] * n
@@ -486,6 +539,9 @@ class Forecast:
                 cols["actual"] += np.repeat(actual, len(levels)).tolist()
                 cols["pit"] += np.repeat(pits, len(levels)).tolist()
                 cols["withheld"] += [why for why in withheld for _ in levels]
+                for step in range(1, h + 1):
+                    for name, v in zip(COVERAGE, covered(step, None)):
+                        cols[name] += [v] * len(levels)
                 for span, total in column["totals"].items():
                     summed = float(actual[:span].sum()) if span <= ahead and np.isfinite(actual[:span]).all() else np.nan
                     m = len(levels)
@@ -500,6 +556,9 @@ class Forecast:
                     cols["actual"] += [summed] * m
                     cols["pit"] += [np.nan] * m
                     cols["withheld"] += [None] * m
+                    for name, v in zip(COVERAGE, covered(span, span)):
+                        cols[name] += [v] * m
+        pit_column = np.asarray(cols["pit"], dtype=np.float64)
         table = pa.table(
             {
                 "member": pa.array(cols["member"], type=pa.string()),
@@ -511,50 +570,48 @@ class Forecast:
                 "level": pa.array(cols["level"], type=pa.float64()),
                 "value": pa.array(np.asarray(cols["value"], dtype=np.float64), from_pandas=True),
                 "actual": pa.array(np.asarray(cols["actual"], dtype=np.float64), from_pandas=True),
-                "pit": pa.array(np.asarray(cols["pit"], dtype=np.float64), from_pandas=True),
+                "pit": pa.array(pit_column, from_pandas=True),
+                "displacement": pa.array(np.abs(2.0 * pit_column - 1.0), from_pandas=True),
                 "withheld": pa.array(cols["withheld"], type=pa.string()),
+                **{name: pa.array(cols[name], type=pa.int64() if name in ("coverage_points", "coverage_datasets") else pa.float64()) for name in COVERAGE},
             }
         )
         for e in errors:
             telemetry.item_failed(caller, "/forecast", e["error"])
-        answer: dict[str, Any] = {"errors": errors, "coverage": coverage.held(plan.grain, plan.horizon, plan.spans, plan.levels)}
-        assumptions = [coverage.basis(plan.grain)] if answer["coverage"] else []
+        answer: dict[str, Any] = {"errors": errors}
+        assumptions = [coverage.basis(plan.grain)] if held else []
         if plan.spans:
             assumptions.append(forecast.dependence(plan.grain))
         alone = len({one.member for one in plan.inputs if one.series.mostly_zero})
         if alone:
             assumptions.append(forecast.alone(alone))
         assumptions += plan.demoted
-        if plan.walk:
-            # The walk's verdict, the service's own: per member and target the held shares over the walked points with a
-            # PIT and the newest point's displacement; one score and band over every newest point scored
-            members_out, scored = [], []
-            for (member, column), points in sorted(walked.items()):
+        if plan.backtest:
+            # The backtest's result, per member and target: the share of backtested points with a PIT inside the 80% and
+            # the 90% interval, the newest period backtested, and the score and state of that point. A member's score is
+            # its newest displacement raised to the number of newest points scored in the request, so the dataset's state
+            # is the worst of the members' and needs no field of its own. The points themselves are the table's rows.
+            members_out, newest = [], []
+            for (member, column), points in sorted(backtested.items()):
                 points.sort(key=lambda p: p[0])
-                origin_row, period, newest_pit, why = points[-1]
+                _, period, newest_pit, why = points[-1]
                 pits_known = [p for _, _, p, w in points if w is None and np.isfinite(p)]
-                d = forecast.displacement(newest_pit) if why is None and np.isfinite(newest_pit) else None
-                if d is not None:
-                    scored.append(d)
+                newest.append(forecast.displacement(newest_pit) if why is None and np.isfinite(newest_pit) else None)
                 members_out.append(
                     {
                         "member": member,
                         "column": column,
-                        "walked": len(points),
+                        "backtested": len(points),
                         "held_80": float(np.mean([0.1 <= p <= 0.9 for p in pits_known])) if pits_known else None,
                         "held_90": float(np.mean([0.05 <= p <= 0.95 for p in pits_known])) if pits_known else None,
-                        "newest": {
-                            "origin": _period(periods, origin_row),
-                            "period": period,
-                            "pit": newest_pit if d is not None else None,
-                            "displacement": d,
-                            "withheld": why,
-                        },
+                        "period": period,
                     }
                 )
-            score, band = forecast.verdict(scored, plan.threshold)
-            answer["walk"] = {"score": score, "band": band, "threshold": plan.threshold, "members": members_out}
-            assumptions.append(forecast.walk_basis(plan.threshold))
+            scored = sum(d is not None for d in newest)
+            for m, d in zip(members_out, newest):
+                m["score"], m["state"] = forecast.member_result(d, scored, plan.threshold)
+            answer["backtest"] = {"threshold": plan.threshold, "members": members_out}
+            assumptions.append(forecast.backtest_basis(plan.threshold))
         if assumptions:
             answer["assumptions"] = assumptions
         return table, answer
@@ -580,18 +637,17 @@ def _stamps(table: pa.Table) -> np.ndarray:
     kind = column.type
     dated = pa.types.is_date(kind) or pa.types.is_timestamp(kind)
     if not dated and not (pa.types.is_string(kind) or pa.types.is_large_string(kind)):
-        raise Refusal(f"/whatif needs `period` as a date or a timestamp ({kind} here): the calendar is read from it")
+        raise Refusal(f"/whatif needs `period` as a date or a timestamp ({kind} here): the calendar is read from it", code="period_type")
     try:
         cast = column.cast(pa.timestamp("ms")) if not (pa.types.is_timestamp(kind) and kind.tz) else column.cast(pa.timestamp("ms", tz=kind.tz))
         return np.asarray(cast.to_numpy(zero_copy_only=False)).astype("datetime64[ms]")
     except (pa.ArrowException, TypeError, ValueError) as e:
-        raise Refusal(f"/whatif needs `period` as a date or a timestamp: {e}") from e
+        raise Refusal(f"/whatif needs `period` as a date or a timestamp: {e}", code="period_type") from e
 
 
 def _input(table: pa.Table, name: str) -> np.ndarray:
     """An input as numbers: a yes-or-no column as 1 and 0, a text
-    column as whether there is an entry (as the tests read a holiday's
-    name)."""
+    column as whether there is an entry (a holiday's name)."""
     kind = table.schema.field(name).type
     if pa.types.is_boolean(kind):
         return np.asarray(table.column(name).cast(pa.float64()).to_numpy(zero_copy_only=False), dtype=np.float64)
@@ -618,24 +674,24 @@ class Whatif:
     def parse(table: pa.Table, spec: dict[str, Any]) -> _WhatifPlan:
         targets = spec.get("targets")
         if not isinstance(targets, list) or not targets or any(not isinstance(t, str) for t in targets):
-            raise _spec("targets", "`targets` is a non-empty list of the columns to answer for")
+            raise _spec("targets", "targets_invalid", "`targets` is a non-empty list of the columns to answer for")
         for t in targets:
             if t in wire.RESERVED or t not in table.column_names:
-                raise _spec("targets", f"`targets`: the table has no value column `{t}`")
+                raise _spec("targets", "target_unknown", f"`targets`: the table has no value column `{t}`")
             if wire.is_category(table.schema.field(t)):
-                raise _spec("targets", f"`targets`: column `{t}` holds text, and the what-if needs numbers")
+                raise _spec("targets", "target_text", f"`targets`: column `{t}` holds text, and the what-if needs numbers")
         if len(set(targets)) != len(targets):
-            raise _spec("targets", "`targets` names a column twice")
+            raise _spec("targets", "target_twice", "`targets` names a column twice")
         levels = _levels(spec)
 
         table, groups = wire.by_member(table, "/whatif", twice=True)
         status = wire.status(table)
         if (status == "forecast").any():
-            raise _spec("status", "`status`: /whatif takes `actual` rows, and the periods ahead as `plan` and as `scenario`")
+            raise _spec("status", "status_forecast", "`status`: /whatif takes `actual` rows, and the periods ahead as `plan` and as `scenario`")
         stamps = _stamps(table)
         inputs = [c for c in wire.value_columns(table) if c not in targets]
         if not inputs:
-            raise Refusal("/whatif needs an input: a value column that is not a target")
+            raise Refusal("/whatif needs an input: a value column that is not a target", code="input_missing")
         values = {t: wire.numeric(table, t) for t in targets} | {c: _input(table, c) for c in inputs}
         errors: list[dict] = []
         members: list[whatif.Member] = []
@@ -644,24 +700,34 @@ class Whatif:
             at = {name: s + np.flatnonzero(status[s:e] == name) for name in ("actual", "plan", "scenario")}
             for name, where in at.items():
                 if len(where) > 1 and (np.diff(stamps[where]) <= np.timedelta64(0, "ms")).any():
-                    raise Refusal(f"member `{member}` has two `{name}` rows of one period")
+                    raise Refusal(f"member `{member}` has two `{name}` rows of one period", code="period_twice")
             actual, planned, changed = at["actual"], at["plan"], at["scenario"]
             if not len(actual):
-                errors.append({"member": member, "error": "no actual rows to read"})
+                errors.append({"member": member, "code": "no_history", "error": "no actual rows to read"})
                 continue
             if not len(planned) or len(planned) != len(changed) or (stamps[planned] != stamps[changed]).any():
-                raise Refusal(f"member `{member}`: the periods ahead come twice, as `plan` and as `scenario`, the same periods in both")
+                raise Refusal(f"member `{member}`: the periods ahead come twice, as `plan` and as `scenario`, the same periods in both", code="ahead_mismatch")
             if stamps[planned][0] <= stamps[actual][-1]:
-                raise Refusal(f"member `{member}`: a period ahead that is not after its last actual row — the history comes first")
+                raise Refusal(f"member `{member}`: a period ahead that is not after its last actual row — the history comes first", code="status_order")
             h = len(planned)
             actual = actual[-whatif.CONTEXT :]
-            moved_here = sum(
-                1 for c in inputs if not ((values[c][planned] == values[c][changed]) | (np.isnan(values[c][planned]) & np.isnan(values[c][changed]))).all()
-            )
-            need = whatif.rows_needed(stamps[actual], len(inputs), moved_here)
+            moved_here = whatif.moved_inputs({c: values[c][planned] for c in inputs}, {c: values[c][changed] for c in inputs})
+            if not moved_here:
+                # A scenario that moves no input of this member: nothing to read, and the other members are answered.
+                errors.append({"member": member, "code": "nothing_changed", "error": "the `plan` and `scenario` rows hold the same inputs for this member"})
+                continue
+            need = whatif.rows_needed(stamps[actual], len(inputs), len(moved_here))
             if len(actual) < need + h:
-                why = f" on this grain with {len(inputs)} inputs, {moved_here} changed" if need > whatif.MIN_HISTORY else ""
-                errors.append({"member": member, "error": f"{len(actual)} actual periods: {h} ahead need {need + h} behind them{why}"})
+                why = f" on this grain with {len(inputs)} inputs, {len(moved_here)} changed" if need > whatif.MIN_HISTORY else ""
+                errors.append(
+                    {
+                        "member": member,
+                        "code": "history_short",
+                        "needed": need + h,
+                        "given": len(actual),
+                        "error": f"{len(actual)} actual periods: {h} ahead need {need + h} behind them{why}",
+                    }
+                )
                 continue
             members.append(
                 whatif.Member(member, stamps[actual], stamps[planned], {t: values[t][actual] for t in targets}, {c: values[c][actual] for c in inputs},
@@ -669,21 +735,12 @@ class Whatif:
             )  # fmt: skip
             rows.append((actual[-h:], planned, changed))
 
-        def differs(c: str) -> bool:
-            return any(not ((m.plan[c] == m.scenario[c]) | (np.isnan(m.plan[c]) & np.isnan(m.scenario[c]))).all() for m in members)
-
-        moved = [c for c in inputs if differs(c)]
-        if members and not moved:
-            raise Refusal(
-                "the `plan` and `scenario` rows hold the same inputs: nothing is changed",
-                422,
-                [{"field": "status", "error": "no input differs between `plan` and `scenario`"}],
-            )
+        moved = [c for c in inputs if any(c in whatif.moved_inputs(m.plan, m.scenario) for m in members)]
         return _WhatifPlan(table, targets, levels, moved, members, rows, errors)
 
     @staticmethod
     async def serve(own: Owner, caller: str, plan: _WhatifPlan) -> tuple[pa.Table, dict]:
-        # The median is always read: the shift and the history's estimate are taken from it.
+        # The median is read in every request: the shift and the history's estimate are taken from it.
         quantiles = sorted(set(plan.levels) | {whatif.MEDIAN})
         asked, median = [quantiles.index(a) for a in plan.levels], quantiles.index(whatif.MEDIAN)
         todo = [(i, t) for i in range(len(plan.members)) for t in plan.targets]
@@ -701,7 +758,7 @@ class Whatif:
                 three = got[3 * n : 3 * n + 3]
                 failed = next((q for q in three if isinstance(q, Exception)), None)
                 if failed is not None:
-                    errors.append({"member": plan.members[i].name, "column": t, "error": str(failed)})
+                    errors.append({"member": plan.members[i].name, "column": t, "code": "model_failed", "error": str(failed)})
                     continue
                 held, planned, changed = three
                 out.append((i, t, three, whatif.reading(plan.members[i], t, plan.changed, held[:, median], planned[:, median], changed[:, median], starts)))
@@ -716,11 +773,11 @@ class Whatif:
             "level",
             "value",
             "actual",
+            "effect",
             "history_value",
             "history_low",
             "history_high",
             "sign",
-            "confidence",
             "basis",
             "explains",
             "error",
@@ -734,8 +791,10 @@ class Whatif:
             h, m = len(member.ahead), len(asked)
             recorded = member.targets[t][-h:]
             nothing = np.full(h, np.nan)
+            effect = three[2][:, median] - three[1][:, median]  # per period: the scenario's median minus the plan's
             for status, q, where in zip(("held_back", "plan", "scenario"), three, plan.rows[i]):
                 changed = status == "scenario"
+                cols["effect"] += np.repeat(effect if changed else nothing, m).tolist()
                 cols["period"] += np.repeat(where, m).tolist()
                 cols["status"] += [status] * (h * m)
                 cols["level"] += np.tile(np.asarray(plan.levels), h).tolist()
@@ -747,12 +806,11 @@ class Whatif:
             cols["member"] += [member.name] * n
             cols["column"] += [t] * n
             cols["sign"] += [said["sign"]] * n
-            cols["confidence"] += [whatif.CONFIDENCE[said["sign"]]] * n
             cols["basis"] += [said["basis"]] * n
             cols["explains"] += [said["explains"]] * n
             cols["error"] += [said["error"]] * n
             cols["history_error"] += [said["history_error"]] * n
-        text = ("member", "column", "status", "sign", "confidence", "basis")
+        text = ("member", "column", "status", "sign", "basis")
         table = pa.table(
             {
                 name: wire.taken(periods, cols[name])
@@ -769,8 +827,8 @@ class Whatif:
 
 
 async def healthz(_: Request) -> Response:
-    """Alive, and what the owner has done: `owner` carries its counters
-    and the time of its last cycle, for a probe that wants more than the port."""
+    """Liveness, and the worker's counters: `owner` carries them and the
+    time of its last job, for a health check that needs more than the open port."""
     k = kernels.peek()
     own = _OWNER
     return JSONResponse(
@@ -790,8 +848,8 @@ app = telemetry.asgi(
     Starlette(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
-            Route("/forecast", _door(Forecast), methods=["POST"]),
-            Route("/whatif", _door(Whatif), methods=["POST"]),
+            Route("/forecast", _endpoint(Forecast), methods=["POST"]),
+            Route("/whatif", _endpoint(Whatif), methods=["POST"]),
         ]
     )
 )

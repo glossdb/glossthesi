@@ -1,17 +1,16 @@
-# The contract: what crosses the wire
+# The API contract
 
-The service's API, as glossdb and any other caller meet it. Written
-2026-09-30. Every route takes one table and
-a specification, and answers one table with what produced it. The
-what-if route was agreed and built on 2026-10-02
-(`docs/whatif.md`).
+The service's API, as glossdb and any other caller use it. Every
+endpoint takes one table and a specification, and answers one table
+and an object that says what produced it. The endpoints serve
+glossdb's preview features: forecasts, expected ranges and scenarios.
 
 ## One table, two encodings
 
 A request is one table and a specification. The table has a row per
-member and period and a column per value; the specification says
-what to do with it. An answer is one table and an object that names
-what produced it and what failed.
+member and period and a column per value. The specification says
+what to do with it. An answer is one table and an answer object that
+names the service and what failed.
 
 | Encoding | Request | Answer |
 |---|---|---|
@@ -19,13 +18,18 @@ what produced it and what failed.
 | `application/json` | `{"spec": {…}, "table": {"member": […], "period": […], …}}`: the table column by column, a `null` where a value is missing. | `{"table": {…}, "answer": {…}}`, the table column by column. |
 
 The two encodings carry the same table and the same specification,
-and answer the same. Arrow is what glossdb sends: column names and
-types travel with the rows, and nothing is parsed twice. JSON is for
-small bodies and for reading by eye. The answer is in the request's
-encoding. A refusal is always JSON: `{"error": "…"}` with a 4xx, and
-where the specification is at fault, `{"error": "…", "errors":
-[{"field": "…", "error": "…"}]}` naming the field an agent has to
-repair, the first found.
+and get the same answer. Arrow is what glossdb sends: column names
+and types travel with the rows. JSON is for small bodies and for
+reading by eye. A request without a content type is read as JSON. The
+answer is in the request's encoding.
+
+An error response is JSON in both encodings: `{"error": "…", "code":
+"…"}` with a 4xx or 5xx status. `code` is stable and a caller maps it
+without reading `error` (the codes are listed under "Error codes",
+below). Where a field of the specification is at fault, the body is
+`{"error": "…", "code": "…", "errors": [{"field": "…", "code": "…",
+"error": "…"}]}`. It names the first field found at fault, so that an
+agent can repair it.
 
 The body is at most 32 MB (`GLOSSTHESI_MAX_BODY_MB`).
 
@@ -33,10 +37,10 @@ The body is at most 32 MB (`GLOSSTHESI_MAX_BODY_MB`).
 
 | Column | Type | Meaning |
 |---|---|---|
-| `member` | string | The series, or the member of the dimension the rows are by: a metric's name, a segment, a store. Required by `/forecast`. |
-| `period` | string, date, timestamp or integer | The period of the row. The service orders a member's rows by it and never parses it: the calendar is the caller's, and `grain` in the specification says what a period is. A string period has to sort in time order as text (`2026-07`, `2026-W27`), or it is sent as a date. A member with two rows of one period is refused. Required by `/forecast`. |
-| `status` | string | `actual`, `plan`, `forecast` or `scenario`. Absent, every row is `actual`. What a row's status means is in each route below. |
-| every other column | numeric, or string or boolean for a category | A value per row. Numbers are read as float64, a null as missing. A string or boolean column is a category: a covariate for `/forecast`. |
+| `member` | string | The series, or the member of the dimension the rows are by: a metric's name, a segment, a store. Required. A column of another type is read as text. |
+| `period` | string, date, timestamp or integer | The period of the row. Required. `/forecast` orders a member's rows by it and does not parse it: the calendar is the caller's, and `grain` in the specification says what a period is. A string period has to sort in time order as text (`2026-07`, `2026-W27`), or it is sent as a date. `/whatif` needs a date or a timestamp. A member with two rows of one period gets a 400; `/whatif` takes each period ahead twice, once per status. |
+| `status` | string | `actual`, `plan`, `forecast` or `scenario`. Absent, every row is `actual`. What a row's status means is in each endpoint's section below. |
+| every other column | numeric, or string or boolean for a category | A value per row. Numbers are read as float64, a null as missing. A string or boolean column is a category: a covariate for `/forecast`, an input for `/whatif`. |
 
 Nothing in the table names a dataset, a metric's meaning or an
 actor. The caller keeps the names and reads them back from the
@@ -44,44 +48,46 @@ answer, where every row carries its `member`, `period` and `column`.
 
 ## The answer object
 
-Under `answer` in every encoding:
+Under `answer` in both encodings:
 
 | Field | Meaning |
 |---|---|
 | `service` | The service's name: `glossthesi`. |
 | `version` | The build: `<version>+<commit>` from the image, `dev` on a laptop. |
-| `errors` | The items that failed alone, each with what names it (`member`, `column`, `origin`) and `error` in words. Empty when nothing failed. |
-| `assumptions` | What the answer rests on that the model did not produce: per entry the `field` it bears on, the value, and its `basis` in words (`measured: …` with the finding, or `assumed: …`). Absent when the answer rests on nothing but the model. |
+| `errors` | The members, columns or origins that failed on their own, each with what names it (`member`, `column`, `origin`), a `code`, and `error` in words. A history too short also carries `needed` and `given`: the rows needed and the rows the member has. Empty when nothing failed. |
+| `assumptions` | What the answer rests on that the model did not produce: per entry the `field` it bears on, the value, and its `basis` in words (`measured: …` with the finding, `fitted: …`, or `assumed: …`). Absent when the answer rests on nothing but the model. |
 
-A route may add fields of its own; they are listed below.
+An endpoint may add fields of its own; they are listed below.
 
-## `/forecast`: the periods ahead, or the walk
+## `/forecast`: the periods ahead, or a backtest
 
-Chronos-2, as its package ships it, the series of a request forecast
-together in groups of one shape (`docs/forecast.md`, GK-26), except a
-series at least half of whose known values are zero, which is
-forecast by itself (GK-66; `assumptions` says so, `field` `members`,
-with how many such series the request held).
+The model is Chronos-2, as its package ships it. The series of a
+request with the same covariates are forecast together
+(`docs/forecast.md`, GK-26). A series at least half of whose known
+values are zero is forecast by itself (GK-66); `assumptions` has an
+entry for it (`field` `members`) with the number of such series in
+the request.
 
 **The table.** Rows with status `actual` are the history. Rows of
 any other status after a member's last actual row are the periods
-ahead, in order: they carry the values of the covariates known
-ahead, and the target's values in them are ignored. They are
-optional: without them the periods ahead have no labels and the
-answer's `period` is null there.
+ahead, in order. They carry the values of the covariates known
+ahead; the target's values in them are ignored. They are optional:
+without them the periods ahead have no labels and the answer's
+`period` is null there. A row of another status before a member's
+last actual row gets a 400.
 
 **The specification.**
 
 | Field | Meaning | Absent |
 |---|---|---|
-| `targets` | The columns to forecast. Every other value column is a covariate: its past values ride with the history, and it is known ahead where the member's rows past the last actual hold it for the whole horizon. Where a member has rows ahead that do not (a missing value, fewer rows than the horizon), the covariate informs the forecast over the history only, and `assumptions` says so for that member and column (`field` `covariates`). | required |
+| `targets` | The columns to forecast. Every other value column is a covariate. Its past values go to the model with the history. It is known ahead where the member's rows past the last actual hold it for the whole horizon. Where a member has rows ahead that do not (a missing value, fewer rows than the horizon), the model uses the covariate over the history only, and `assumptions` has an entry for that member and column (`field` `covariates`). | required |
 | `horizon` | Periods ahead, 1 to 1024. | required, except with `origins`, where it is 1 |
-| `levels` | The quantile levels asked for, each between 0.01 and 0.99, the model's own grid; a level outside it is refused, not answered with the grid's edge under its name. | required |
-| `totals` | Spans in periods: for each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain; the answer's `assumptions` names the value and on what data it was measured (`docs/forecast.md`, GK-45, GK-48). | none |
-| `grain` | `month`, `week`, `day` or `quarter`: only the interval of a total depends on it, and `coverage` reads the grain's table. Every grain's dependence is measured, and the answer says on what data (GK-45, GK-48). | `month` |
-| `width` | The distance of every quantile from the median is multiplied by it after the model has answered, for a caller whose record says this dataset's intervals run too narrow or too wide: one number, or one per period ahead. The rule for learning it from a record is `glossthesi.forecast.learned_width` (GK-35). | 1 |
-| `origins` | The walk, or a backtest: a number k, the k actual periods before every member's last each taken as an origin, so that every period walked has its actual value; or a list of periods, the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it, with the covariates' later values taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT, and the answer object carries the walk's verdict (`walk`, below). | one forecast per member, from its last actual period |
-| `threshold` | The walk's red line: the score past which its band is `red`, above zero and at most 1. | 0.98 |
+| `levels` | The quantile levels asked for, each between 0.01 and 0.99, the model's own grid. A level outside it gets a 400. | required |
+| `totals` | Spans in periods, each from 1 to the horizon. For each, the quantiles of the total of the first so many periods come back beside the periods' own. The total's interval combines the periods' intervals with a dependence per grain. The answer's `assumptions` names the value and the data it was fitted on (`docs/forecast.md`, GK-45, GK-48). | none |
+| `grain` | `month`, `week`, `day` or `quarter`. The interval of a total depends on it, and the coverage columns read the grain's table. | `month` |
+| `width` | A number above zero, or one per period ahead. The distance of every quantile from the median is multiplied by it after the model has answered. For a caller whose stored forecasts and actual values show that this dataset's intervals are too narrow or too wide. `glossthesi.forecast.learned_width` computes it from them (GK-35). | 1 |
+| `origins` | A rolling-origin backtest. A number k: the k actual periods before every member's last are each taken as an origin, so that every period forecast one step ahead has its actual value. Or a list of periods: the same origins for every member. From each origin the target is forecast `horizon` periods ahead from the history up to and including it. The covariates' later values in the table are taken as known ahead. Where the table holds the target's actual value for a period forecast, the answer carries it and the PIT, and the answer object carries the backtest's result (`backtest`, below). | one forecast per member, from its last actual period |
+| `threshold` | The backtest score above which a member's state is `red`. Above zero and at most 1. | 0.98 |
 
 **The answer table.** One row per member, origin, step, column and
 level.
@@ -97,95 +103,98 @@ level.
 | `level` | The quantile level. |
 | `value` | The quantile. |
 | `actual` | The target's value at that period where the table holds it, else null. The same on every level row of the point. |
-| `pit` | The quantile at which the actual landed in the model's own distribution, 0 to 1, read against the raw answer before any `width`; null without an actual, and null where `withheld` says why. The same on every level row of the point. |
-| `withheld` | Why the point's PIT says nothing, else null. A series that repeats values moves on a grid (a ratio over a fixed field, a count), and the smallest gap between two of its values is the grid's step: a corridor — the distance between the outermost levels asked — narrower than that step, with the actual within a step of the model's median, is the model's noise around a value the series takes exactly; a constant history whose actual equals it is the same case. An actual further off than a step is a real move whatever the corridor, and keeps its PIT; a series that never repeats has no grid. The same on every level row of the point. |
+| `pit` | The PIT (probability integral transform): the quantile level of the actual value in the model's own forecast distribution, 0 to 1. It is read against the model's quantiles before any `width`. Null without an actual, and null where `withheld` gives a reason. The same on every level row of the point. |
+| `displacement` | \|2·pit − 1\|: 0 at the median, 0.8 at the edge of the 10-90 interval, 0.9 at the edge of the 5-95 interval. Null where `pit` is. The same on every level row of the point. |
+| `withheld` | Why the point has no PIT, else null. A series that repeats values has a resolution: the smallest gap between two of its values (a count, a ratio over a fixed denominator). The range is the distance between the outermost levels asked. A range narrower than the resolution, with the actual within one resolution step of the model's median, is the model's noise around a value the series takes exactly, and the PIT is withheld. A constant history whose actual equals it is the same case. An actual more than one step away is a real change whatever the range, and keeps its PIT. A series that repeats no value has no resolution, and its PIT is not withheld. The same on every level row of the point. |
 
-A member that cannot be forecast fails alone, and so does one of its
-targets and one origin: the failure is in `answer.errors` with the
-member, the column and the origin named, and the other rows are
-answered. A member needs 6 known values of a target behind an
-origin. What the model itself refuses fails the members forecast with
-it and no others.
+And the coverage of the point's step, or of its span on a total row:
+how often the intervals that the request's levels form covered the
+actual values on held-out data, at this grain (`docs/forecast.md`,
+GK-46). The same on every level row of the point.
 
-**The answer object** carries `coverage` beside `errors` and
-`assumptions`: how often the bands the request's levels form held on
-held-out data, at this grain (`docs/forecast.md`, GK-46). One entry
-per step of the horizon and per span asked, per band: `step`, `span`
-(null for a period), `low` and `high` (the levels that bound the
-band), `share` (the actual values inside it), `se` (its standard
-error, clustered by series and by origin), `points` (how many the
-share counts) and `datasets` (how many held-out datasets it pools). A
-share with an error of 0.05 and one with 0.01 are not the same
-knowledge, and a caller's rule reads both numbers. The bands measured are 0.10 to 0.90 and 0.05 to
-0.95; a band the levels do not form, a step past the table (12
-months, 13 weeks, 31 days, 4 quarters) and a span at a dependence
-other than the one it was measured at have no entry. The spans of
-days and quarters stand at a dependence fitted on the same datasets
-(GK-48), so their shares are fits, not held-out readings;
-`assumptions` names the basis. The shares are pooled over datasets: a
-caller whose own record of forecasts and actual values is long enough
-reads that first.
+| Column | Meaning |
+|---|---|
+| `coverage_80`, `coverage_80_se` | The share of actual values inside the 10-90 interval, and its standard error, clustered by series and by origin. Null where the levels asked do not hold 0.1 and 0.9. |
+| `coverage_90`, `coverage_90_se` | The same for the 5-95 interval. Null where the levels do not hold 0.05 and 0.95. |
+| `coverage_points` | How many points the shares count. |
+| `coverage_datasets` | How many held-out datasets they pool. |
 
-**The walk's verdict.** With `origins`, the answer object carries
-`walk`: per member and target (`members`), how many points were
-walked, `held_80` and `held_90` — the share of the walked points with
-a PIT that landed inside the 10-90 and the 5-95 band — and the
-`newest` point one step ahead of the latest origin: its origin, its
-period, its PIT, its `displacement` (|2·pit − 1|: 0 at the median,
-0.8 at the 10-90 band's edge, 0.9 at the 5-95 band's) and `withheld`
-where it says nothing. Over the newest points scored — those with a
-PIT — one `score`, the worst displacement raised to their number, so
-that the edges keep their base rate at any count, and its `band`:
-`green` to 0.8, `yellow` to 0.9, `orange` to the `threshold`, `red`
-past it; nothing scored is 0.0, green. The rule and the threshold are
-in `assumptions` (`field` `walk`). The verdict is the service's: the
-caller lands it and routes on it, and keeps no rule of its own.
+A share with a standard error of 0.05 and one with 0.01 carry
+different evidence, so a caller's rule reads both numbers. The
+columns are null for a step past the table (12 months, 13 weeks, 31
+days, 4 quarters) and for a span at a dependence other than the one
+it was measured at. The dependence of days and quarters was fitted on
+the same datasets (GK-48), so the shares of their spans are fits, not
+held-out measurements; `assumptions` names the basis (`field`
+`coverage`) wherever a share is served. The shares are pooled over
+datasets. A caller that stores enough of its own forecasts and actual
+values reads those first.
 
-**The walk as glossdb declares it.** One member per metric, one
-value column, no covariates, `origins` 6, `horizon` 1, the levels of
-the bands, every period sent complete: the calendar is the caller's,
-so a period the data's edge falls inside is not sent, and the newest
-point walked is the newest whole one. The answer holds per metric and
-walked period the bands, the actual, the PIT or why it is withheld,
-and the verdict. The record of walks stays on glossdb's side; the
-service reads no record. A dataset whose record says the bands run
-narrow sends a `width` (GK-35: on records of one to two years it does
-not pay yet).
+A member that cannot be forecast fails on its own, and so does one
+of its targets and one origin. The failure is in `answer.errors` with
+the member, the column and the origin named and its code, and the
+other rows are answered. A member needs 6 known values of a target
+behind an origin (`history_short`, `needed` 6). An error of the model
+itself fails the members forecast in the same group and no others
+(`model_failed`).
 
-## `/whatif`: which way a column moves under a changed input
+**The backtest's result.** With `origins`, the answer object carries
+`backtest`:
 
-Agreed and built on 2026-10-02. What it rests on is in
-`docs/whatif.md`: five checkpoints on thirty real tables and an
-instance space analysis.
+- `threshold`: the threshold used.
+- `members`: per member and target, `backtested`, the number of
+  points backtested one step ahead; `held_80` and `held_90`, the share
+  of those points with a PIT inside the 10-90 and the 5-95 interval;
+  `period`, the newest period backtested, one step ahead of the
+  latest origin; and `score` and `state`, that point's result.
+- `score`: the newest point's displacement raised to the power k, the
+  number of members' newest points that have a PIT in the request.
+  The largest of k calibrated displacements lies under an edge e with
+  probability e to the k, so each edge keeps its base rate over the
+  members at any count (`docs/forecast.md`). A member whose newest
+  PIT is withheld scores 0.0.
+- `state`: `green` up to a score of 0.8, `yellow` up to 0.9, `orange`
+  up to the `threshold`, `red` above it.
 
-TabICL's forecaster as its package ships it, every member on its
-own. The route promises a direction, not a size:
+The dataset's state is the worst of its members' states, and its
+score the largest of theirs. The rule and the threshold are in
+`assumptions` (`field` `backtest`). The service computes the result;
+the caller stores the states and applies no rule of its own.
 
-- **The direction** is stated where two estimates agree: the
+**The backtest as glossdb sends it.** One member per metric, one
+value column, no covariates, `origins` 6, `horizon` 1, the levels
+0.05, 0.1, 0.5, 0.9 and 0.95, and complete periods only. The calendar
+is the caller's: a period that the data covers in part is not sent,
+so the newest point backtested is the newest complete period. The
+answer holds, per metric and backtested period, the quantiles, the
+actual value, the PIT or the reason it is withheld, and the result.
+glossdb stores the answer; the service stores no forecasts. A dataset
+whose stored results show that the intervals are too narrow sends a
+`width` (GK-35: on one to two years of stored forecasts it does not
+improve the forecast).
+
+## `/whatif`: the direction a column moves under a changed input
+
+The model is TabICL's forecaster, as its package ships it. Every
+member is answered on its own. The endpoint answers a direction, not
+a size. The measurements are in `docs/whatif.md`.
+
+- **The direction** is stated where two estimates agree. The
   member's own history shows the column higher where the input was
-  higher, the calendar and the other inputs held, and the model
-  moves it the same way. It is an association in that history, read
-  for the same period and the period before: the input's value one
-  period back is held beside it, so what the column does in the
-  period after the input moves has its own slope, and a sustained
-  change's effect is the sum of the two (since 2026-10-17). The two
-  estimates read the same rows with
-  the same features, so their agreement is one piece of evidence;
-  that nothing which set the input also moved the column is the
-  caller's assumption, declared in `assumptions`. No table records
-  what would have happened under an input that was not changed, so
-  this agreement is the evidence there is, with one exception: on a
-  real device whose causal graph is known (a wind tunnel, 2026-10-17),
-  every sign stated was right and 3% of the sensors the lever cannot
-  touch got one (`docs/whatif.md`, against a truth). On 3,737 tested series-instances where
-  the history showed an effect, the model agreed with its direction
-  on 94%; on a source judged only after the rule was fixed, on 87
-  to 100%.
-- **The size is a guess between two estimates:** the model's and
-  the history's. In the same tests the model's shift was within
-  half to one and a half times the history's on 47%, and under half
-  of it on another 47%. No shape of table is known under which the
-  size can be trusted on a new table.
+  higher, with the calendar and the other inputs held constant, and
+  the model moves it the same way. It is an association in that
+  history, read for the same period and the period before: the
+  input's value one period back is held beside it, so the period
+  after the input moves has its own slope, and the effect of a
+  sustained change is the sum of the two. The two estimates read the
+  same rows with the same features, so their agreement is one piece
+  of evidence. That nothing which set the input also moved the
+  column is the caller's assumption, declared in `assumptions`.
+- **The size** lies between two estimates: the model's and the
+  history's. Measured: the model's shift was within half to one and
+  a half times the history's on 47% of the tested series, and under
+  half of it on another 47% (`docs/whatif.md`). No shape of table was
+  found under which the size holds on a new table.
 - **The error** is measured on the caller's own table: the last
   periods of the history are held back, predicted and compared.
 
@@ -193,68 +202,83 @@ own. The route promises a direction, not a size:
 periods ahead come twice: once with the inputs as planned (status
 `plan`) and once with the change (status `scenario`), the same
 periods in both. The service applies no factors: the caller writes
-the changed values. `period` is a date or a timestamp (in the JSON
-encoding, text such as `2026-07-06`), since the forecaster builds
-the calendar from it. A timestamp with a time zone is read in UTC:
-the weekday and the hour the history's reading holds are UTC's. A
-member has one row per period and status.
-A member needs, behind the periods ahead, 26 actual periods or as
-many as the history's reading holds columns plus eight, whichever is
-more: with two inputs, both changed, 26 on a monthly or weekly table,
-26 on a daily one, 48 on an hourly one (the level, the trend, the
-year's cycle, the weekday, the hour, every input, and one lag of each
-changed input, which also costs the first row); a member with fewer
-fails alone and the error names the number. Its last 4,096 are read.
-A target's values in the rows ahead are ignored.
+the changed values. A `forecast` row gets a 400.
 
-An input is a number; a yes-or-no column is read as 1 and 0, and a
-text column as whether there is an entry (a holiday's name).
+- `period` is a date or a timestamp (in the JSON encoding, text such
+  as `2026-07-06`): the forecaster builds the calendar from it. A
+  timestamp with a time zone is read in UTC, so the weekday and the
+  hour in the history's regression are UTC's.
+- A member has one row per period and status.
+- A target's values in the rows ahead are ignored.
+- A member needs, behind the periods ahead, 26 actual periods, or as
+  many as the history's regression has columns plus eight, whichever
+  is more. The regression's columns are the level, the trend, four
+  for the year's cycle, six for the weekday on a daily or finer
+  table, 23 for the hour on a finer one, every input, and one lag of
+  each changed input, which also costs the first row. With two
+  inputs, both changed, that is 26 on a monthly, weekly or daily
+  table and 48 on an hourly one. A member with fewer fails on its own
+  with the code `history_short`, `needed` (these rows plus the
+  periods ahead) and `given` (its actual rows). A caller that wants to
+  know before it sends reads `needed` from the first answer: the rule
+  depends only on the grain, the number of inputs and the number
+  changed.
+- The last 4,096 actual periods of a member are read.
+
+An input is a number. A yes-or-no column is read as 1 and 0. A text
+column is read as whether there is an entry (a holiday's name).
 
 An empty cell of a number or of a yes-or-no column is unknown to the
 service, not zero and not no. Where empty means something (no
 markdown that week), the caller fills it before sending. An input
-that is empty in more than half of a member's history is not read:
-asked about, it gets `?`; otherwise it is left out of what the
-history's reading holds, and `basis` names it. A row with a gap in an
-input that is read is left out of that reading.
+that is empty in more than half of a member's history is not read.
+If it is the changed input, the sign is `?`. Otherwise it is left out
+of the history's regression, and `basis` names it. A row with a gap
+in an input that is read is left out of the regression.
 
-One input or several differ between `plan` and `scenario`; a
-request where none differs is refused. Several inputs changed at once
-are read together (built 2026-10-16): the history's estimate is the
-sum of what each does, from the one regression that holds every
-input, with its interval from the same draws; an interaction between
-two inputs is not something the history reads, so a model that read
-one would show as a disagreement.
+One input or several differ between `plan` and `scenario`. An input
+differs for a member where a period ahead holds a known value in both
+rows and the two differ. A member for which none differs is not read:
+it is in `answer.errors` with the code `nothing_changed`, and the
+other members are answered. Several inputs changed at once are
+read together: the history's estimate is the sum of what each does,
+from the one regression that holds every input, with its interval
+from the same resamples. The history's regression does not read an
+interaction between two inputs. Where the model reads one, the two
+estimates disagree and no sign is stated.
 
 **The specification.**
 
 | Field | Meaning | Absent |
 |---|---|---|
-| `targets` | Every column the caller wants an answer for. Each is answered from its own history, also one that is defined from others (revenue from price and units): nothing is carried from one column to another, so no definition has to cross the wire and none is recomputed by the caller. Every other value column is an input known ahead. | required |
+| `targets` | Every column the caller wants an answer for. Each is answered from its own history, also one that is defined from others (revenue from price and units). Nothing is carried from one column to another, so the caller sends no definition and recomputes none. Every other value column is an input known ahead. The table needs at least one input. | required |
 | `levels` | The quantile levels asked for, each strictly between 0 and 1. | required |
 
-**The answer object** carries `changed`, the inputs that differ, as
-a list in the table's order, and `parts`, beside `errors` and
-`assumptions`: per member, column and changed input, what that input
-alone does to the column over the periods ahead by the member's
-history (`history_shift`, the mean over the periods, the lag's part
-included, with `history_low` and `history_high`, its 90% interval),
-from the same regression as the joint estimate, so that the parts'
-estimates add up to it; their intervals do not add, and the joint
-interval is the one to read. The joint regression holds the lag of
-every changed input, so a part differs from the single-input reading
-of the same lever by a little. A user reads the single levers and the pair in one
-picture: which lever carries the effect, and when two cancel.
+**The answer object** carries `changed` and `parts` beside `errors`
+and `assumptions`.
+
+- `changed`: the inputs that differ, as a list in the table's order.
+- `parts`: per member, column and changed input, what that input
+  alone does to the column over the periods ahead by the member's
+  history: `history_shift`, the mean over the periods with the lag's
+  share included, and `history_low` and `history_high`, its 90%
+  interval. The parts come from the same regression as the joint
+  estimate, so their estimates add up to it. Their intervals do not
+  add; the joint interval is the one to read. The joint regression
+  holds the lag of every changed input, so a part differs a little
+  from the same input changed alone. A user sees which input carries
+  the effect, and when two cancel.
 
 Several changed inputs are also checked together: each may lie
-inside its own range while the history never held the combination.
-Where the scenario's combination of the changed inputs lies farther
-from every history row than the distance within which 99 of 100
-history rows find a neighbour in that space, each input scaled by its
-spread, in more than a tenth of the periods ahead, the route states
-no sign and `basis` says whether the inputs as planned or the change
-go beyond together. For switch inputs that is whether the two have
-been on together before. The reach and the share are declared in
+inside its own range while the history holds no row with that
+combination. The check measures distance in the space of the changed
+inputs, each scaled by its spread. The reach is the distance within
+which 99 of 100 history rows find their nearest neighbour. Where the
+combination lies farther than the reach from every history row, in
+more than a tenth of the periods ahead, no sign is stated and `basis`
+says whether the inputs as planned or the change go beyond the
+history. For two switch inputs this asks whether both have been on
+together before. The reach and the share are declared in
 `assumptions`.
 
 **The answer table.** One row per member, column, status, period
@@ -265,124 +289,189 @@ and level.
 | `member`, `period`, `column` | The member, the period, the target. |
 | `status` | `held_back`: the last periods of the history, as many as there are ahead, predicted from the rows before them. `plan`: the periods ahead, inputs as planned. `scenario`: the same under the change. |
 | `level`, `value` | The quantile level and the model's quantile. |
-| `actual` | On `held_back` rows, what was recorded. The same on every level row of the point. |
-| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus what the member's own history says the change does at that period, from the change made there and the change made the period before (the input's lag, held since 2026-10-17; nothing from before the first period ahead, whose row before is history), and the 90% interval of that. The other inputs, the trend and the calendar's cycles are held. The same on every level row of the point. |
+| `actual` | On `held_back` rows, the value in the table. The same on every level row of the point. |
+| `effect` | On `scenario` rows: the model's median under the scenario minus its median as planned, for that period. The same on every level row of the point. |
+| `history_value`, `history_low`, `history_high` | On `scenario` rows: the plan's median plus the history's estimate of the change at that period, and the 90% interval of that. The estimate uses the change made in that period and the change made the period before (the input's lag). The first period ahead has no change before it: the row before is history. The other inputs, the trend and the calendar's cycles are held constant. The same on every level row of the point. |
 
 And per member and column, the same on each of its rows:
 
 | Column | Meaning |
 |---|---|
-| `sign` | `+` or `-`: the history shows the input, or the inputs together, moving the column, read on the rows and on their changes, the same way, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of what the history's regression leaves of the column (its residual spread). `=`: the changed inputs are the same as planned and under the scenario for this member, so nothing is asked of it. `?`: nothing can be said; `basis` says why, naming the input where one of several fails a check. |
-| `confidence` | The sign in words: `direction`, `no effect visible`, `not answerable`, `unchanged`. |
-| `basis` | The reason, in words; read before the numbers. For `?`: the model and the history disagree on the direction; the input never varied; it cannot be told apart from another input (which); the change, or the input as planned, goes beyond what the history holds; the input is mostly empty; the history is too short to read; the history shows nothing, or shows an effect on one reading only (the rows, or their changes from row to row), and the model moves the column; the history's estimate of the change points both ways over the periods ahead (a change that reverses, or two levers moving in different periods) and nets to nothing over the horizon as a whole. Where it points both ways and the horizon's mean is off zero, the sign is stated for the horizon as a whole and `basis` says so with the counts. |
-| `explains` | The share of the column the changed input explains in this member's history, the other inputs and the calendar held; the inputs together, where several are changed. |
-| `error` | The error of the level: the mean distance of the held-back median from what was recorded over the periods held back, in the column's own units. It is one window; it says how far the model's level was off, not how far the change is. The held-back rows carry the quantiles and the actual, so a caller counts how many of them fell inside a band. |
-| `history_error` | What the history leaves of the column: the spread of what remains once the level, the trend, the calendar's cycles and the inputs are held, in the column's own units. The history's estimate of the change (`history_value`) is read against it, and a tenth of it is the `0` sign's threshold. Null where the history was not read. |
+| `sign` | `+` or `-`: the history shows the input, or the inputs together, moving the column the same way on the rows and on their changes from row to row, neither 90% interval over zero; and the model's shift goes that way. `0`: the history shows no effect and the model's shift is under a tenth of the residual spread of the history's regression (no effect visible). `?`: no sign can be stated; `basis` says why, and names the input where one of several fails a check. |
+| `basis` | The reason, in words; read it before the numbers. For `?`: the model and the history disagree on the direction; the input did not vary; it cannot be told apart from another input (which one); the change, or the input as planned, goes beyond the history's range; the input is mostly empty; the history is too short; the history shows nothing, or shows an effect on the rows only or on their changes only, and the model moves the column; the history's estimate points up in some periods and down in others (a change that reverses, or two inputs changed in different periods) and nets to nothing over the horizon. Where it points both ways and the horizon's mean is off zero, the sign is stated for the horizon as a whole and `basis` gives the counts. |
+| `explains` | The share of the column the changed input explains in this member's history, with the other inputs and the calendar held constant; the inputs together, where several are changed. |
+| `error` | The error of the level: the mean distance of the held-back median from the actual values over the periods held back, in the column's own units. It is one window. It says how far the model's level was off, not how far the change is. The held-back rows carry the quantiles and the actual, so a caller can count how many fell inside an interval. |
+| `history_error` | The residual spread of the history's regression: the standard deviation of what remains once the level, the trend, the calendar's cycles and the inputs are fitted, in the column's own units. The history's estimate of the change (`history_value`) is read against it, and a tenth of it is the threshold of the `0` sign. Null where the history was not read. |
 
-`no effect visible` means that this member's data does not show
-one, not that there is none.
+`0`, no effect visible, means that this member's data does not show
+an effect, not that there is none.
 
-**The bracket.** For a period under the scenario, the range
-between the model's median and the history's interval (the lowest
-and the highest of `value` at the median, `history_low` and
-`history_high`). It is a range between two estimates and has no
-stated coverage. The model errs low more often than high.
+**The range between the two estimates.** For a period under the
+scenario: from the lowest to the highest of `value` at the median,
+`history_low` and `history_high`. It lies between two estimates. The
+model errs low more often than high.
 
-A member that cannot be answered fails alone, and so does one of
-its targets: the failure is in `answer.errors`. A read costs three
-predictions per target (held back, plan, scenario) and the reading
-of the history: six stores of 120 weeks with two targets take about
-twelve seconds on a laptop. The route needs the packages of TabICL's
-forecaster (`tabicl[forecast]`); a build without them refuses the
-read with a 422 that says so. The thresholds above (the 90% interval, a tenth of
-what the history leaves of the spread, how far an input must stand apart) are in the answer's
-`assumptions`, each with its basis.
+**No coverage.** No interval of the what-if has a stated coverage:
+not the model's quantiles under a changed input, not the history's
+interval, not the range between them. The answer says so in
+`assumptions`, with `field` `coverage` and `value` null, and its
+table has none of the coverage columns of `/forecast`.
 
-**The whole algorithm is here; the caller holds none of it.**
-The what-if is not to be split over two code bases (decided
-2026-10-02). So:
+A member that cannot be answered fails on its own, and so does one
+of its targets: the failure is in `answer.errors` with its code
+(`no_history`, `nothing_changed`, `history_short`, `model_failed`). A
+request costs three predictions per target (held back, plan,
+scenario) and the regression on the history. The endpoint needs the
+packages of TabICL's forecaster (`tabicl[forecast]`); a build without
+them answers a 422, `models_missing`. The thresholds above (the 90% interval,
+a tenth of the residual spread, how much of an input's variation the
+other inputs must leave) are in the answer's `assumptions`, each
+with its basis.
 
-- **Every number wanted is a target.** Sign, bracket and error come
-  per column from that column's own history. The caller builds the
-  table and reads the rows.
-- **A total is sent as a member:** a series the caller has summed,
-  as it sums any series. The service adds nothing up, since only
-  the caller knows whether a column adds.
-- **Break-even is a use of the answer,** not part of it: a
-  threshold the caller compares with the bracket, in SQL.
+**The service holds the whole method; the caller holds none of it.**
+
+- **Every number wanted is a target.** The sign, the range and the
+  error come per column from that column's own history. The caller
+  builds the table and reads the rows.
+- **A total is sent as a member:** a series the caller has summed.
+  The service sums nothing, since only the caller knows whether a
+  column is additive.
+- **Break-even is a use of the answer:** a threshold the caller
+  compares with the range, in SQL.
 
 TabICL reads one column at a time, so two columns tied by a
-definition are each read on their own, and their brackets need not
-agree with the definition exactly. Where both move the same way,
-that they belong together shows in the answer itself.
-
-**What the calling actor may do with the answer** is described in a
-skill, not built into the caller (decided 2026-10-02): carry a
-bracket through a definition it knows, compare it with a threshold
-for a break-even, or sum. The actor may have that knowledge or not;
-the contract does not depend on it.
+definition are each read on their own, and their ranges need not
+agree with the definition exactly.
 
 ## Statuses
 
 | Status | When |
 |---|---|
-| 200 | Served. Items that failed alone are in `answer.errors`. |
-| 400 | The body, the table or the specification has the wrong shape; the error names what, and `errors` names a specification field at fault. |
-| 401 | No bearer this service accepts. |
-| 404 | No such route. |
-| 413 | The body is over the cap, as sent or as the Arrow stream decodes to (a compressed stream may be many times its wire size): send it in parts. |
-| 422 | The service refuses the read: a specification that does not fit the table (`errors` names the field), a frame it cannot score. |
-| 429 | The queue is full for this caller; `Retry-After` says how long. |
-| 500 | The service failed; the traceback is in its log, not on the wire. The device's memory running out is this, never members that failed alone. |
-| 503 | The instance is stopping; `Retry-After` says when to retry. |
+| 200 | Served. Members, columns or origins that failed on their own are in `answer.errors`. |
+| 400 | The body, the table or the specification has the wrong shape. The error says what, and `errors` names a specification field at fault. |
+| 401 | No bearer token this service accepts. |
+| 404 | No such path. |
+| 413 | The body is over the limit, as sent or as the Arrow stream decodes to (a compressed stream can decode to many times its size), or the request is larger than one caller's share of the queue. Send it in parts. |
+| 422 | The build lacks the packages of TabICL's forecaster (`models_missing`). |
+| 429 | The queue is full for this caller. `Retry-After` says how long to wait. |
+| 500 | The service failed. The traceback is in its log, not in the response. The device's memory running out is a 500; it is not reported as members that failed on their own. |
+| 503 | The instance is stopping. `Retry-After` says when to retry. |
 
 `GET /healthz` answers `status`, `service`, `version`, `device`,
 `loaded`, `checkpoints` (the TabICL files and the Chronos-2 commit the
-build serves) and the owner's counters, outside the gate.
+build serves) and `owner`, the queue's counters. It needs no
+authentication.
 
-## Authentication and naming
+## Error codes
 
-As before: `Authorization: Bearer …`, a Google-signed ID token for
-`GLOSSTHESI_AUDIENCE` from one of `GLOSSTHESI_CALLERS`, or one of
-`GLOSSTHESI_KEYS`. With neither set every door refuses and the
-service does not start; `GLOSSTHESI_INSECURE_OPEN=true` is the one
-way around, for a laptop. glossdb names this
-service once. Nothing on the wire names a point.
+Every error response carries a `code`, and so does every entry of
+`answer.errors`. The words in `error` may change; the codes do not.
+
+**Error responses.**
+
+| Code | Status | When |
+|---|---|---|
+| `unauthorized` | 401 | No bearer token this service accepts. |
+| `content_type` | 400 | The content type is neither Arrow nor JSON. |
+| `body_unreadable` | 400 | The body is not an Arrow IPC stream, not JSON, or not a JSON object. |
+| `spec_missing` | 400 | No specification: no `spec` in the schema's metadata or in the JSON body. |
+| `spec_unreadable` | 400 | The specification is not a JSON object. |
+| `table_unreadable` | 400 | The JSON `table` is not an object of columns of one length, or a column mixes kinds of values. |
+| `table_empty` | 400 | The table holds no rows. |
+| `column_twice` | 400 | The table names a column twice. |
+| `column_missing` | 400 | No `member` or no `period` column. |
+| `column_type` | 400 | A column cannot be read as its kind: text where a number is needed, a `member` that is not text. |
+| `member_missing` | 400 | `member` is empty on some rows. |
+| `period_missing` | 400 | `period` is empty on some rows, or holds no values. |
+| `period_twice` | 400 | A member has two rows of one period (on `/whatif`, of one period and status). |
+| `period_type` | 400 | `/whatif`: `period` is not a date or a timestamp. |
+| `rows_unordered` | 400 | The rows cannot be ordered by `member` and `period`. |
+| `status_unknown` | 400 | A `status` that is not `actual`, `plan`, `forecast` or `scenario`. |
+| `status_order` | 400 | A row ahead before a member's last actual row. |
+| `status_forecast` | 400 | `/whatif`: a `forecast` row (`field` `status`). |
+| `ahead_mismatch` | 400 | `/whatif`: the periods ahead do not come twice, as `plan` and as `scenario`, the same periods in both. |
+| `input_missing` | 400 | `/whatif`: no value column besides the targets. |
+| `targets_invalid` | 400 | `targets` is not a non-empty list of names. |
+| `target_unknown` | 400 | A target the table has no value column for. |
+| `target_text` | 400 | A target column holds text. |
+| `target_twice` | 400 | `targets` names a column twice. |
+| `levels_invalid` | 400 | `levels` is not a non-empty list of levels strictly between 0 and 1. |
+| `level_outside_grid` | 400 | `/forecast`: a level outside the model's grid, 0.01 to 0.99. |
+| `horizon_invalid` | 400 | `horizon` is missing or not a whole number from 1 to 1024. |
+| `totals_invalid` | 400 | A span outside 1 to the horizon. |
+| `grain_unsupported` | 400 | `grain` is not `month`, `week`, `day` or `quarter`. |
+| `width_invalid` | 400 | `width` is not above zero, or not one factor per period ahead. |
+| `origins_invalid` | 400 | `origins` is neither a number from 1 nor a non-empty list. |
+| `threshold_invalid` | 400 | `threshold` is not above zero and at most 1. |
+| `too_large` | 413 | The body, what it decodes to, or one caller's share of the queue is over the limit. |
+| `models_missing` | 422 | The build lacks the packages of TabICL's forecaster. |
+| `busy` | 429 | The queue is full for this caller. |
+| `failed` | 500 | The service failed. |
+| `draining` | 503 | The instance is stopping. |
+
+A field error carries the same code in `errors[].code` as in `code`.
+
+**Members, columns and origins that failed on their own** (`answer.errors`, with a 200).
+
+| Code | Endpoint | When | Also carries |
+|---|---|---|---|
+| `no_history` | both | The member has no actual rows. | |
+| `history_short` | both | `/forecast`: fewer known values of a target behind an origin than a forecast needs. `/whatif`: fewer actual rows than the history's regression and the periods ahead need. | `needed`, `given` |
+| `origins_short` | `/forecast` | Fewer actual periods than a backtest of `origins` needs; the origins there are are backtested. | `needed` (origins + 1), `given` |
+| `origin_unknown` | `/forecast` | A period in `origins` that is not one of the member's actual periods. | |
+| `nothing_changed` | `/whatif` | The scenario moves no input of this member. | |
+| `model_failed` | both | The model failed on this series (on `/forecast`, with the others of its group). | |
+
+## Authentication
+
+`Authorization: Bearer …` with a Google-signed ID token for
+`GLOSSTHESI_AUDIENCE` from one of `GLOSSTHESI_CALLERS`, or with one
+of `GLOSSTHESI_KEYS`. With neither set, every request gets a 401 and
+the service does not start. `GLOSSTHESI_INSECURE_OPEN=true` turns
+authentication off, for a laptop.
 
 ## For glossdb
 
-What each point sends and receives. The contract is one general
-service call: a table in, a table out, Arrow IPC, the service's name
-and version on every answer, one URL and a route per point.
+What glossdb sends and receives. The contract is one general service
+call: a table in, a table out, the service's name and version in
+every answer, one URL and a path per call.
 
-**The walk (`metric_bands`).** Send the metric series at month
-grain as the one table, complete months only: `member` the metric's
-name, `period` the month, one value column, every row `actual`; the
-specification `{"targets": ["value"], "origins": 6, "horizon": 1,
-"levels": [0.05, 0.1, 0.5, 0.9, 0.95]}`, and `threshold` where the
-record names one. Receive per metric and walked period the five band
-values (one row per level), the `actual`, the `pit` or `withheld`,
-and in the answer object the walk's verdict: the held shares and the
-newest point per metric, one score and band over all. A metric whose
-history is too short for an origin is in `answer.errors` with the
-reason, and the origins it does have are walked: the service needs
-six known values behind an origin, so a full walk of six needs twelve
-months and a metric of eight months gets two walked periods. The
-service owns the walk's rules — the withheld rule, the displacement,
-the score and its bands; the calendar is the caller's, which sends no
-partial period. The record of walks stays glossdb's; the service
-reads none. The bands are the model's own.
+**The backtest (`metric_ranges`).** glossdb sends the metric series
+at month grain as the one table, complete months only: `member` the
+metric's name, `period` the month, one value column, every row
+`actual`. The specification is `{"targets": ["value"], "origins": 6,
+"horizon": 1, "levels": [0.05, 0.1, 0.5, 0.9, 0.95], "grain":
+"month", "threshold": …}`, the threshold taken from the test.
 
-**The what-if (`metric_scenario()`).** Send
-the table at the grain at which the overridden column varies from
-row to row, the history as `actual`, and the periods ahead twice,
-as planned and under the plan rewrite, with every concept to be
-answered as a target. Receive the rows above and serve them: the
-sign, the model's rows, the history's estimate and `basis` per
-concept.
+It receives, per metric and backtested period, the five quantiles
+(one row per level), the `actual`, the `pit` and its `displacement`
+or `withheld`, and the coverage of the step. The answer object
+carries, per metric, the shares inside the two intervals, the newest
+period backtested and its score and state. The dataset's state is the
+worst metric's.
 
-**Configuration.** One URL, naming this service: the server's
-`GLOSSDB_SERVICE_URL`, the route each call's own. The bearer:
-`GLOSSDB_SERVICE_TOKEN`, a key sent as is, or an ID token minted for
-`GLOSSDB_SERVICE_AUDIENCE`.
+A metric whose history is too short for an origin is in
+`answer.errors` with `history_short` (or `origins_short`), `needed`
+and `given`, and the origins it does have are backtested. The service
+needs six known values behind an origin. So a backtest of six origins
+needs twelve months, and a metric of eight months gets two
+backtested periods.
 
+The service owns the backtest's rules: when a PIT is withheld, the
+displacement, the scores and the states. The calendar is the
+caller's, which sends no partial period. glossdb stores the results;
+the service stores none. The quantiles are the model's own.
+
+**The what-if (`metric_scenario`).** glossdb sends the table at the
+grain at which the changed column varies from row to row: the history
+as `actual`, and the periods ahead twice, as planned and under the
+scenario, with every column to be answered as a target. It receives
+the rows above and serves them: the sign, the model's rows with the
+`effect` per period, the history's estimate and `basis` per column,
+and per member that cannot be answered its code. It attaches no
+coverage to the what-if's range.
+
+**Configuration.** One URL that names this service, glossdb's
+`GLOSSDB_SERVICE_URL`; each call adds its path. The bearer token is
+`GLOSSDB_SERVICE_TOKEN`, a key sent as it is, or an ID token issued
+for `GLOSSDB_SERVICE_AUDIENCE`.

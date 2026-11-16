@@ -1,13 +1,14 @@
 [project]
 name = "glossthesi"
 version = "0.3.0"
-description = "The model service behind glossdb: forecasts and the walk by Chronos-2, the what-if by TabICL, over HTTP"
+description = "The model service behind glossdb: forecasts and rolling-origin backtests by Chronos-2, the what-if by TabICL, over HTTP"
 requires-python = ">=3.13,<3.14"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 dependencies = [
-    # Pinned: the what-if's record (docs/whatif.md) was made with the
-    # package's forecaster at this version; a move re-runs the suite.
+    # Pinned: the what-if's measurements (docs/whatif.md) were made with
+    # the package's forecaster at this version; a new version runs the
+    # evaluation again.
     # The `forecast` extra (pandas, statsmodels, matplotlib) is what
     # the package's forecaster imports: the what-if.
     "tabicl[forecast]==2.2.0",
@@ -15,12 +16,12 @@ dependencies = [
     "numpy>=2",
     "starlette>=1.6",
     "uvicorn>=0.52",
-    # The checkpoints come from the hub cache; baked into the image at build.
+    # The checkpoints come from the hub cache; the image build includes them.
     "huggingface-hub>=0.30",
-    # The forecasting model (Chronos-2, Apache-2.0); its weights are baked beside the regressor's. Pinned, as the
+    # The forecasting model (Chronos-2, Apache-2.0); its weights are in the image beside the regressor's. Pinned, as the
     # checkpoint's revision is (`forecast.REVISION`): every measured number describes this package and those weights.
     "chronos-forecasting==2.3.2",
-    # The wire: Arrow IPC streams in and out, and the JSON encoding built through the same tables.
+    # The wire format: Arrow IPC streams in and out, and the JSON encoding built through the same tables.
     "pyarrow>=17",
 ]
 

@@ -1,5 +1,5 @@
-# The kernel service image: the reference package, the checkpoints
-# baked in, one process. torch's wheels carry the CUDA runtime
+# The model service image: the package, the checkpoints included, one
+# process. torch's wheels carry the CUDA runtime
 # libraries, so no CUDA base image; the host supplies the driver. On a
 # machine without a GPU the same image serves on CPU.
 #
@@ -10,10 +10,10 @@
 # VERSION set to pyproject's version plus the commit; a v* tag names it.
 #
 # What a host sets: GLOSSTHESI_AUDIENCE and GLOSSTHESI_CALLERS (or
-# GLOSSTHESI_KEYS) for the doors, without which the service does not
-# start, OTEL_EXPORTER_OTLP_ENDPOINT for a
-# collector, the queue and cache sizes (README). Nothing here names a
-# project or a region; that is the deployment's, not the image's.
+# GLOSSTHESI_KEYS) for authentication, without which the service does
+# not start; OTEL_EXPORTER_OTLP_ENDPOINT for a collector; the queue and
+# body limits (README). Nothing here names a project or a region; those
+# are the deployment's settings.
 
 # The build: uv resolves the lock into a venv and the checkpoints are
 # pulled into a hub cache. Nothing of this stage but those two trees
@@ -43,10 +43,10 @@ COPY --from=build --chown=kernel:kernel /app/hf /app/hf
 COPY --chown=kernel:kernel LICENSE /app/LICENSE
 USER kernel
 WORKDIR /app
-# The build's name, reported by /healthz and every log line.
+# The build's name, reported by /healthz, in every answer and in the start log line.
 ARG VERSION=dev
 # The process itself as PID 1, so the host's SIGTERM reaches uvicorn;
-# the checkpoints are baked, nothing is fetched at start.
+# the checkpoints are in the image, nothing is downloaded at start.
 ENV GLOSSTHESI_VERSION=$VERSION GLOSSTHESI_ADDR=0.0.0.0:8100 \
     HF_HOME=/app/hf HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
 EXPOSE 8100

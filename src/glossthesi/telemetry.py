@@ -1,20 +1,21 @@
-"""What the service says about itself: one JSON line per event on
-stdout, and the same as OpenTelemetry when a collector is named.
+"""Logs, metrics and traces: one JSON line per event on stdout, and
+the same as OpenTelemetry when a collector is named.
 
-The events are the ones that decide capacity and health: a cycle of
-the owner (reads, callers, cells, device seconds), a refusal (status,
-caller, why), a failure (with its traceback), a start. Never a payload.
+The events are the ones that decide capacity and health: a job run by
+the device worker (`cycle`: requests, callers, cells, device seconds),
+an error response (`refused`: status, caller, reason), a failure (with
+its traceback), a start. No request or answer body is logged.
 
-Logs go to stdout as JSON always — a host that keeps stdout (Cloud
-Run, any container runtime) parses that as-is. With
+Logs go to stdout as JSON in every configuration; a host that keeps
+stdout (Cloud Run, any container runtime) parses them as they are. With
 `OTEL_EXPORTER_OTLP_ENDPOINT` set (the standard variable; a collector
 sidecar on `http://localhost:4318` in a Cloud Run service) and the
 `otel` extra installed, traces, metrics and logs also go there over
-OTLP/HTTP: a span per request and per cycle; counters for reads,
-cycles and refusals; a histogram of cycle seconds; a gauge of what
+OTLP/HTTP: a span per request and per job; counters for requests,
+jobs and error responses; a histogram of job seconds; a gauge of what
 waits in the queue. `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`
 name the service, as the SDK reads them. Without the extra or the
-endpoint, everything here is the log line."""
+endpoint, the log lines are the only output."""
 
 from __future__ import annotations
 
@@ -51,13 +52,13 @@ class _Line(logging.Formatter):
 
 
 def configure(version: str) -> dict[str, Any]:
-    """Wire stdout logging, and OTLP when named. Returns what was wired, for the start line."""
+    """Set up stdout logging, and OTLP when an endpoint is named. Returns what was set up, for the start line."""
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_Line())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(logging.INFO)
-    # uvicorn's own loggers ride the same handler, as JSON lines.
+    # uvicorn's own loggers use the same handler, as JSON lines.
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).handlers = []
         logging.getLogger(name).propagate = True
@@ -97,14 +98,14 @@ def configure(version: str) -> dict[str, Any]:
     global _TRACER
     _TRACER = traces.get_tracer("glossthesi")
     _METERS.update(
-        cycles=meter.create_counter("glossthesi.cycles", description="owner cycles"),
-        reads=meter.create_counter("glossthesi.reads", description="reads answered"),
+        cycles=meter.create_counter("glossthesi.cycles", description="jobs run by the device worker"),
+        reads=meter.create_counter("glossthesi.reads", description="requests answered"),
         cells=meter.create_counter("glossthesi.cells", description="cells answered (float64 values)"),
         refusals=meter.create_counter("glossthesi.refusals", description="requests refused, by status"),
-        failures=meter.create_counter("glossthesi.failures", description="cycles that raised"),
+        failures=meter.create_counter("glossthesi.failures", description="jobs that raised"),
         item_failures=meter.create_counter("glossthesi.item_failures", description="members or columns that failed alone inside a served answer"),
-        cycle_seconds=meter.create_histogram("glossthesi.cycle.seconds", unit="s", description="device seconds per cycle"),
-        queue_cells=meter.create_gauge("glossthesi.queue.cells", description="cells waiting after the cycle was taken"),
+        cycle_seconds=meter.create_histogram("glossthesi.cycle.seconds", unit="s", description="device seconds per job"),
+        queue_cells=meter.create_gauge("glossthesi.queue.cells", description="cells waiting after the job was taken"),
     )
     return {"logs": "stdout+otlp", "otlp": endpoint}
 
@@ -142,19 +143,20 @@ def failed(kind: str, jobs: int, error: BaseException) -> None:
     _add("failures", 1, kind=kind)
 
 
-def refused(status: int, caller: str | None, route: str, reason: str) -> None:
-    log.info("refused", extra={"status": status, "caller": caller, "route": route, "reason": reason})
-    _add("refusals", 1, status=str(status), route=route)
+def refused(status: int, caller: str | None, path: str, reason: str) -> None:
+    """An error response, logged and counted by status and path."""
+    log.info("refused", extra={"status": status, "caller": caller, "route": path, "reason": reason})
+    _add("refusals", 1, status=str(status), route=path)
 
 
-def item_failed(caller: str | None, route: str, reason: str) -> None:
-    """One member or column of a served request failed alone (`answer.errors`): the request was answered, not refused."""
-    log.info("item_failed", extra={"caller": caller, "route": route, "reason": reason})
-    _add("item_failures", 1, route=route)
+def item_failed(caller: str | None, path: str, reason: str) -> None:
+    """One member or column of a served request failed alone (`answer.errors`): the request was answered with a 200."""
+    log.info("item_failed", extra={"caller": caller, "route": path, "reason": reason})
+    _add("item_failures", 1, route=path)
 
 
 def span(name: str, **attributes: Any):
-    """A span when tracing is wired, else nothing — `with span(...):`."""
+    """A span when tracing is set up, else nothing — `with span(...):`."""
     if _TRACER is None:
         import contextlib
 
@@ -163,7 +165,7 @@ def span(name: str, **attributes: Any):
 
 
 def asgi(app: Any) -> Any:
-    """The app behind a request span when tracing is wired, else itself."""
+    """The app behind a request span when tracing is set up, else itself."""
     if _TRACER is None:
         return app
     from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware

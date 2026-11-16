@@ -1,6 +1,6 @@
-# The standing invariant, checked on every push and pull request: the format, the lint with every finding a failure, and
-# the suite — the wire in both encodings, the owner, the what-if's reading of a history and the density read against the
-# pinned fixture — on CPU. The image is release.yml's: built at a v* tag, pushed to GHCR.
+# Checked on every push and pull request: the format, the lint with every finding a failure, and the suite — the API in
+# both encodings, the queue, the what-if's regression on a history and TabICL's forecaster with the real weights — on
+# CPU. The image is release.yml's: built at a v* tag, pushed to GHCR.
 name: tests
 on:
   push:

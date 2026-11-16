@@ -1,1 +1,1 @@
-"""The model service behind glossdb: forecasts and the walk, the what-if."""
+"""The model service behind glossdb: forecasts, rolling-origin backtests and the what-if."""
